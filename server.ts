@@ -1,0 +1,817 @@
+// bb-plugin-inbox — backend entry.
+//
+// A "Needs You" inbox: ranks threads that are blocked on you / failed / finished,
+// and pushes instant notifications to desktop (native macOS) and mobile
+// (Telegram) — quiet during long runs, loud only when you're actually needed.
+//
+// Detection/ranking borrows bb-plugin-attention; dedupe + deeplink borrow
+// bb-plugin-ntfy. Both MIT, by Shane Logsdon.
+import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
+import { z } from "zod";
+import {
+  buildSnapshot,
+  DISMISS_PREFIX,
+  type AttentionItem,
+  type AttentionKind,
+} from "./attention";
+import {
+  desktopAvailable,
+  escapeHtml,
+  resolveDeeplinkBaseUrl,
+  sendDesktop,
+  sendTelegram,
+  telegramChats,
+  telegramGetUpdates,
+  threadUrl,
+  type TelegramConfig,
+} from "./notify";
+import { routeReply } from "./reply";
+import {
+  trackerAdd,
+  trackerComplete,
+  trackerList,
+  type TrackerTask,
+} from "./tracker";
+
+const NOTI_PREFIX = "noti:";
+const LAST_FINISHED_KEY = "last-finished-noti";
+const TGMAP_PREFIX = "tgmap:";
+const TG_OFFSET_KEY = "tg-offset";
+const TGMAP_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+interface TgMapRecord {
+  threadId: string;
+  ts: number;
+}
+
+interface NotiRecord {
+  at: number;
+  kind: AttentionKind;
+}
+
+const zItem = z.object({
+  threadId: z.string(),
+  projectId: z.string(),
+  title: z.string(),
+  kind: z.enum(["error", "blocked", "finished"]),
+  label: z.string(),
+  detail: z.string().optional(),
+  attentionAt: z.number(),
+  updatedAt: z.number(),
+});
+
+export const rpcContract = defineRpcContract({
+  list: {
+    input: z.object({
+      projectId: z.string().nullable().default(null),
+      includeFinished: z.boolean().default(true),
+    }),
+    output: z.object({
+      items: z.array(zItem),
+      total: z.number().int(),
+      generatedAt: z.number(),
+    }),
+  },
+  status: {
+    input: z.null(),
+    output: z.object({
+      desktop: z.boolean(),
+      telegram: z.boolean(),
+      notifyBlocked: z.boolean(),
+      notifyFailed: z.boolean(),
+      notifyFinished: z.boolean(),
+    }),
+  },
+  dismiss: {
+    input: z.object({ threadId: z.string(), attentionAt: z.number() }),
+    output: z.object({ ok: z.boolean() }),
+  },
+  // Generic notification entrypoint for other plugins (e.g. lanes-governor).
+  notify: {
+    input: z.object({
+      title: z.string(),
+      body: z.string().default(""),
+      channel: z.enum(["desktop", "telegram", "both"]).default("both"),
+      url: z.string().nullable().default(null),
+    }),
+    output: z.object({ desktop: z.boolean(), telegram: z.boolean() }),
+  },
+});
+
+export default async function plugin(bb: BbPluginApi) {
+  const settings = bb.settings.define({
+    notifyBlocked: {
+      type: "boolean",
+      label: "Notify when an agent is blocked on you",
+      default: true,
+    },
+    notifyFailed: {
+      type: "boolean",
+      label: "Notify when a thread fails",
+      default: true,
+    },
+    notifyFinished: {
+      type: "boolean",
+      label: "Notify when a turn finishes (noisier)",
+      default: false,
+    },
+    desktopEnabled: {
+      type: "boolean",
+      label: "Desktop notifications (macOS)",
+      default: true,
+    },
+    telegramInstant: {
+      type: "boolean",
+      label: "Instant Telegram push on new blocks/failures",
+      default: true,
+    },
+    telegramReplies: {
+      type: "boolean",
+      label: "Let me reply from Telegram (answers/approvals flow back to bb)",
+      default: true,
+    },
+    telegramBotToken: {
+      type: "string",
+      label: "Telegram bot token",
+      secret: true,
+      description:
+        "From @BotFather. Set with `bb plugin config inbox set telegramBotToken <token>`.",
+    },
+    telegramChatId: {
+      type: "string",
+      label: "Telegram chat id",
+      default: "",
+      description: "Run `bb inbox chats` to discover it after messaging your bot.",
+    },
+    cooldownSeconds: {
+      type: "string",
+      label: "Cooldown between finished-turn pings (seconds)",
+      default: "45",
+    },
+    quietStart: {
+      type: "string",
+      label: "Quiet hours start (HH:MM, 24h)",
+      default: "",
+    },
+    quietEnd: {
+      type: "string",
+      label: "Quiet hours end (HH:MM, 24h)",
+      default: "",
+    },
+  });
+
+  // ----- config helpers -------------------------------------------------
+
+  function telegramConfig(cfg: {
+    telegramBotToken: string | undefined;
+    telegramChatId: string;
+  }): TelegramConfig | null {
+    if (cfg.telegramBotToken && cfg.telegramChatId) {
+      return { botToken: cfg.telegramBotToken, chatId: cfg.telegramChatId };
+    }
+    return null;
+  }
+
+  function quietNow(cfg: { quietStart: string; quietEnd: string }): boolean {
+    const start = parseHhmm(cfg.quietStart);
+    const end = parseHhmm(cfg.quietEnd);
+    if (start === null || end === null) return false;
+    const now = new Date();
+    const minutes = now.getHours() * 60 + now.getMinutes();
+    return start <= end
+      ? minutes >= start && minutes < end
+      : minutes >= start || minutes < end; // wraps past midnight
+  }
+
+  async function loadDismissed(): Promise<Map<string, number>> {
+    const map = new Map<string, number>();
+    for (const key of await bb.storage.kv.list(DISMISS_PREFIX)) {
+      const at = await bb.storage.kv.get<number>(key);
+      if (typeof at === "number") map.set(key.slice(DISMISS_PREFIX.length), at);
+    }
+    return map;
+  }
+
+  async function pruneTgMap(): Promise<void> {
+    const cutoff = Date.now() - TGMAP_TTL_MS;
+    for (const key of await bb.storage.kv.list(TGMAP_PREFIX)) {
+      const rec = await bb.storage.kv.get<TgMapRecord>(key);
+      if (rec && rec.ts < cutoff) await bb.storage.kv.delete(key);
+    }
+  }
+
+
+  // ----- notification dispatch -----------------------------------------
+
+  async function deeplink(item: AttentionItem): Promise<string | undefined> {
+    try {
+      const base = await resolveDeeplinkBaseUrl(bb.server.loopbackBaseUrl);
+      return threadUrl(base, item.projectId, item.threadId);
+    } catch {
+      return undefined;
+    }
+  }
+
+  async function maybeNotify(
+    item: AttentionItem,
+    cfg: Awaited<ReturnType<typeof settings.get>>,
+  ): Promise<void> {
+    const enabled =
+      item.kind === "blocked"
+        ? cfg.notifyBlocked
+        : item.kind === "error"
+          ? cfg.notifyFailed
+          : cfg.notifyFinished;
+    if (!enabled) return;
+    if (quietNow(cfg)) return;
+
+    const recKey = `${NOTI_PREFIX}${item.threadId}`;
+    const rec = await bb.storage.kv.get<NotiRecord>(recKey);
+    if (rec && rec.at === item.attentionAt && rec.kind === item.kind) return;
+
+    if (item.kind === "finished") {
+      const cooldownMs = (Number(cfg.cooldownSeconds) || 45) * 1000;
+      const last = (await bb.storage.kv.get<number>(LAST_FINISHED_KEY)) ?? 0;
+      if (Date.now() - last < cooldownMs) return;
+    }
+
+    const title = truncate(item.title, 90);
+    const body = item.detail
+      ? `${item.label} — ${truncate(item.detail, 200)}`
+      : item.label;
+
+    if (cfg.desktopEnabled && desktopAvailable()) {
+      await sendDesktop(`bb: ${title}`, body, item.label);
+    }
+
+    const tg = telegramConfig(cfg);
+    if (tg && cfg.telegramInstant) {
+      const url = await deeplink(item);
+      const emoji =
+        item.kind === "error" ? "🚨" : item.kind === "blocked" ? "🙋" : "🔔";
+      const hint =
+        item.kind === "blocked" && cfg.telegramReplies
+          ? "\n<i>Reply to this message to answer.</i>"
+          : "";
+      const text = `${emoji} <b>${escapeHtml(title)}</b>\n${escapeHtml(body)}${hint}`;
+      const res = await sendTelegram(tg, text, url);
+      if (!res.ok) {
+        bb.log.warn(`telegram send failed: ${res.detail}`);
+      } else if (res.messageId !== undefined) {
+        // Map this message so a reply to it routes to this thread.
+        await bb.storage.kv.set(`${TGMAP_PREFIX}${res.messageId}`, {
+          threadId: item.threadId,
+          ts: Date.now(),
+        } satisfies TgMapRecord);
+        await pruneTgMap();
+      }
+    }
+
+    await bb.storage.kv.set(recKey, {
+      at: item.attentionAt,
+      kind: item.kind,
+    } satisfies NotiRecord);
+    if (item.kind === "finished") {
+      await bb.storage.kv.set(LAST_FINISHED_KEY, Date.now());
+    }
+  }
+
+  // ----- reconcile (debounced) -----------------------------------------
+
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  let running = false;
+  let pendingRun = false;
+  let disposed = false;
+
+  async function reconcile(): Promise<void> {
+    const cfg = await settings.get();
+    const dismissed = await loadDismissed();
+    const snapshot = await buildSnapshot(bb, {
+      dismissed,
+      includeFinished: true,
+    });
+    bb.realtime.publish("inbox", {
+      total: snapshot.total,
+      at: snapshot.generatedAt,
+    });
+    for (const item of snapshot.items) {
+      await maybeNotify(item, cfg);
+    }
+  }
+
+  async function runReconcile(): Promise<void> {
+    running = true;
+    try {
+      await reconcile();
+    } catch (error) {
+      bb.log.error(
+        `reconcile failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      running = false;
+      if (pendingRun && !disposed) {
+        pendingRun = false;
+        scheduleReconcile();
+      }
+    }
+  }
+
+  function scheduleReconcile(): void {
+    if (disposed) return;
+    if (running) {
+      pendingRun = true;
+      return;
+    }
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => void runReconcile(), 800);
+  }
+
+  // ----- triggers -------------------------------------------------------
+
+  bb.events.on("thread.idle", () => scheduleReconcile());
+  bb.events.on("thread.failed", () => scheduleReconcile());
+  bb.events.on("thread.active", () => scheduleReconcile());
+  bb.events.on("thread.archived", () => scheduleReconcile());
+
+  const RELEVANT_CHANGES = new Set([
+    "interactions-changed",
+    "status-changed",
+    "read-state-changed",
+    "thread-created",
+    "thread-deleted",
+    "archived-changed",
+  ]);
+
+  bb.background.service("watch", {
+    async start(signal) {
+      const unsubscribe = bb.sdk.subscribe({
+        event: "thread:changed",
+        callback: (event) => {
+          if (event.changes.some((c) => RELEVANT_CHANGES.has(c))) {
+            scheduleReconcile();
+          }
+        },
+      });
+      scheduleReconcile(); // startup sweep
+      await new Promise<void>((resolve) => {
+        if (signal.aborted) {
+          unsubscribe();
+          resolve();
+          return;
+        }
+        signal.addEventListener(
+          "abort",
+          () => {
+            unsubscribe();
+            resolve();
+          },
+          { once: true },
+        );
+      });
+    },
+  });
+
+  // ----- Telegram inbound (reply from your phone) ----------------------
+
+  async function snapshotText(): Promise<string> {
+    const dismissed = await loadDismissed();
+    const snap = await buildSnapshot(bb, { dismissed, includeFinished: false });
+    if (snap.items.length === 0) return "✅ Nothing needs you right now.";
+    const lines = snap.items.map((item, i) => {
+      const mark = item.kind === "error" ? "🚨" : "🙋";
+      return `${i + 1}. ${mark} <b>${escapeHtml(item.title)}</b>\n   ${escapeHtml(item.label)}${item.detail ? ` — ${escapeHtml(truncate(item.detail, 100))}` : ""}`;
+    });
+    return `<b>${snap.total} need you</b>\n\n${lines.join("\n\n")}\n\n<i>Reply to a notification to answer it.</i>`;
+  }
+
+  async function handleUpdate(
+    update: { chatId: string; text: string; replyToMessageId?: number },
+    tg: TelegramConfig,
+  ): Promise<void> {
+    if (update.chatId !== tg.chatId) return; // only the linked owner
+    const text = update.text.trim();
+
+    if (text.startsWith("/")) {
+      const cmd = (text.slice(1).split(/\s+/)[0] ?? "").toLowerCase();
+      const argStr = text.slice(1 + cmd.length).trim();
+      try {
+        if (cmd === "list" || cmd === "inbox") {
+          await sendTelegram(tg, await snapshotText());
+        } else if (cmd === "task" || cmd === "add") {
+          if (!argStr) {
+            await sendTelegram(tg, "Usage: <code>/task &lt;what to do&gt;</code>");
+          } else {
+            const task = await trackerAdd(bb, argStr);
+            await sendTelegram(
+              tg,
+              `📝 Added <b>#${task.seq}</b> ${escapeHtml(task.title)}`,
+            );
+          }
+        } else if (cmd === "todo" && argStr) {
+          const task = await trackerAdd(bb, argStr);
+          await sendTelegram(
+            tg,
+            `📝 Added <b>#${task.seq}</b> ${escapeHtml(task.title)}`,
+          );
+        } else if (cmd === "tasks" || cmd === "todos" || cmd === "todo") {
+          const { tasks, today } = await trackerList(bb, "today");
+          await sendTelegram(tg, formatTasks(tasks, today));
+        } else if (cmd === "done") {
+          const seq = Number(argStr);
+          if (!Number.isInteger(seq)) {
+            await sendTelegram(tg, "Usage: <code>/done &lt;task number&gt;</code>");
+          } else {
+            const task = await trackerComplete(bb, seq);
+            await sendTelegram(
+              tg,
+              task
+                ? `✅ Done: ${escapeHtml(task.title)}`
+                : `No open task #${seq}.`,
+            );
+          }
+        } else if (cmd === "start" || cmd === "help") {
+          await sendTelegram(tg, HELP_TG);
+        } else {
+          await sendTelegram(tg, "Unknown command. Try /help.");
+        }
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        await sendTelegram(
+          tg,
+          /not found|unknown plugin|not installed|disabled|no handler/i.test(msg)
+            ? "The task tracker plugin isn't available."
+            : `⚠️ ${escapeHtml(msg)}`,
+        );
+      }
+      return;
+    }
+
+    // Resolve which thread this reply targets.
+    let threadId: string | undefined;
+    if (update.replyToMessageId !== undefined) {
+      const rec = await bb.storage.kv.get<TgMapRecord>(
+        `${TGMAP_PREFIX}${update.replyToMessageId}`,
+      );
+      threadId = rec?.threadId;
+    }
+    if (!threadId) {
+      const blocked = (
+        await buildSnapshot(bb, { includeFinished: false })
+      ).items.filter((i) => i.kind === "blocked");
+      if (blocked.length === 1) {
+        threadId = blocked[0].threadId;
+      } else if (blocked.length === 0) {
+        await sendTelegram(
+          tg,
+          "Nothing is waiting on you right now. Reply to a notification to answer a specific thread.",
+        );
+        return;
+      } else {
+        await sendTelegram(
+          tg,
+          `${blocked.length} threads are waiting — reply to a specific notification to answer it, or send /list.`,
+        );
+        return;
+      }
+    }
+
+    const result = await routeReply(bb, threadId, text);
+    await sendTelegram(tg, result.message);
+    scheduleReconcile();
+  }
+
+  bb.background.service("telegram-inbound", {
+    async start(signal) {
+      while (!signal.aborted) {
+        const cfg = await settings.get();
+        const tg = telegramConfig(cfg);
+        if (!tg || !cfg.telegramReplies) {
+          await sleep(10_000, signal);
+          continue;
+        }
+        const offset = (await bb.storage.kv.get<number>(TG_OFFSET_KEY)) ?? 0;
+        const res = await telegramGetUpdates(tg.botToken, offset, 25, signal);
+        if (signal.aborted) break;
+        if (!res.ok) {
+          bb.log.warn(`telegram getUpdates failed: ${res.detail}`);
+          await sleep(5_000, signal);
+          continue;
+        }
+        if (res.nextOffset !== offset) {
+          await bb.storage.kv.set(TG_OFFSET_KEY, res.nextOffset);
+        }
+        for (const update of res.updates) {
+          try {
+            await handleUpdate(update, tg);
+          } catch (error) {
+            bb.log.error(
+              `inbound handling failed: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        }
+      }
+    },
+  });
+
+  // ----- RPC ------------------------------------------------------------
+
+  bb.rpc.register(rpcContract, {
+    async list({ projectId, includeFinished }) {
+      const dismissed = await loadDismissed();
+      const snapshot = await buildSnapshot(bb, {
+        projectId,
+        dismissed,
+        includeFinished,
+      });
+      return snapshot;
+    },
+    async status() {
+      const cfg = await settings.get();
+      return {
+        desktop: cfg.desktopEnabled && desktopAvailable(),
+        telegram: telegramConfig(cfg) !== null,
+        notifyBlocked: cfg.notifyBlocked,
+        notifyFailed: cfg.notifyFailed,
+        notifyFinished: cfg.notifyFinished,
+      };
+    },
+    async dismiss({ threadId, attentionAt }) {
+      await bb.storage.kv.set(`${DISMISS_PREFIX}${threadId}`, attentionAt);
+      bb.realtime.publish("inbox", { total: -1, at: Date.now() });
+      return { ok: true };
+    },
+    async notify({ title, body, channel, url }) {
+      const cfg = await settings.get();
+      let desktop = false;
+      let telegram = false;
+      if (
+        (channel === "desktop" || channel === "both") &&
+        cfg.desktopEnabled &&
+        desktopAvailable()
+      ) {
+        await sendDesktop(`bb: ${truncate(title, 90)}`, truncate(body, 200), title);
+        desktop = true;
+      }
+      const tg = telegramConfig(cfg);
+      if ((channel === "telegram" || channel === "both") && tg) {
+        const text = `🔔 <b>${escapeHtml(truncate(title, 90))}</b>${
+          body ? `\n${escapeHtml(truncate(body, 300))}` : ""
+        }`;
+        const res = await sendTelegram(tg, text, url ?? undefined);
+        if (!res.ok) bb.log.warn(`notify telegram failed: ${res.detail}`);
+        else telegram = true;
+      }
+      return { desktop, telegram };
+    },
+  });
+
+  // ----- CLI (`bb inbox …`) --------------------------------------------
+
+  bb.cli.register({
+    name: "inbox",
+    summary: "Threads that need you, with desktop + Telegram notifications",
+    commands: [
+      { name: "list", summary: "List threads needing you", usage: "bb inbox list [--all]" },
+      { name: "dismiss", summary: "Dismiss an item until its next update", usage: "bb inbox dismiss <n>" },
+      { name: "status", summary: "Show notification config", usage: "bb inbox status" },
+      { name: "test", summary: "Send a test notification", usage: "bb inbox test [--desktop|--telegram]" },
+      { name: "chats", summary: "Discover your Telegram chat id", usage: "bb inbox chats" },
+      { name: "task", summary: "Add a daily task (via the tracker plugin)", usage: "bb inbox task <what to do>" },
+      { name: "tasks", summary: "List today's tasks", usage: "bb inbox tasks" },
+      { name: "done", summary: "Complete a task by its number", usage: "bb inbox done <n>" },
+    ],
+    async run(argv) {
+      const [sub, ...rest] = argv;
+      const cfg = await settings.get();
+      const has = (flag: string) => rest.includes(flag);
+
+      try {
+        switch (sub) {
+          case undefined:
+          case "list": {
+            const dismissed = await loadDismissed();
+            const snap = await buildSnapshot(bb, {
+              dismissed,
+              includeFinished: has("--all"),
+            });
+            if (snap.items.length === 0) {
+              return { exitCode: 0, stdout: "Nothing needs you right now." };
+            }
+            const lines = snap.items.map((item, i) => {
+              const badge = item.kind.toUpperCase().padEnd(8);
+              const when = new Date(item.attentionAt).toLocaleTimeString();
+              return `${i + 1}. [${badge}] ${item.title}${item.detail ? ` — ${item.detail}` : ""}  (${when})`;
+            });
+            lines.push(
+              `\n${snap.total} thread${snap.total === 1 ? "" : "s"} need you${snap.total > snap.items.length ? `; showing ${snap.items.length}` : ""}.`,
+            );
+            return { exitCode: 0, stdout: lines.join("\n") };
+          }
+
+          case "dismiss": {
+            const n = Number(rest[0]);
+            const dismissed = await loadDismissed();
+            const snap = await buildSnapshot(bb, {
+              dismissed,
+              includeFinished: true,
+            });
+            const item = Number.isInteger(n) ? snap.items[n - 1] : undefined;
+            if (!item) {
+              return { exitCode: 1, stderr: `No item ${rest[0] ?? ""}. Run \`bb inbox list\`.` };
+            }
+            await bb.storage.kv.set(
+              `${DISMISS_PREFIX}${item.threadId}`,
+              item.attentionAt,
+            );
+            bb.realtime.publish("inbox", { total: -1, at: Date.now() });
+            return { exitCode: 0, stdout: `Dismissed: ${item.title}` };
+          }
+
+          case "status": {
+            const tg = telegramConfig(cfg);
+            const lines = [
+              `desktop:        ${cfg.desktopEnabled && desktopAvailable() ? "on" : "off"}`,
+              `telegram:       ${tg ? "configured" : "(not set)"}`,
+              `  instant push: ${cfg.telegramInstant}`,
+              `notify blocked: ${cfg.notifyBlocked}`,
+              `notify failed:  ${cfg.notifyFailed}`,
+              `notify finished:${cfg.notifyFinished}`,
+              `quiet hours:    ${cfg.quietStart && cfg.quietEnd ? `${cfg.quietStart}–${cfg.quietEnd}` : "(off)"}`,
+            ];
+            return { exitCode: 0, stdout: lines.join("\n") };
+          }
+
+          case "test": {
+            const wantDesktop = !has("--telegram");
+            const wantTelegram = !has("--desktop");
+            const out: string[] = [];
+            if (wantDesktop) {
+              const r = await sendDesktop(
+                "bb inbox",
+                "Test notification from the inbox plugin.",
+                "Test",
+              );
+              out.push(`desktop:  ${r.ok ? "sent" : `failed — ${r.detail}`}`);
+            }
+            if (wantTelegram) {
+              const tg = telegramConfig(cfg);
+              if (!tg) {
+                out.push("telegram: not configured (set telegramBotToken + telegramChatId)");
+              } else {
+                const r = await sendTelegram(
+                  tg,
+                  "✅ <b>bb inbox</b>\nTest notification — you're linked.",
+                );
+                out.push(`telegram: ${r.ok ? "sent" : `failed — ${r.detail}`}`);
+              }
+            }
+            return { exitCode: 0, stdout: out.join("\n") };
+          }
+
+          case "chats": {
+            if (!cfg.telegramBotToken) {
+              return { exitCode: 1, stderr: "Set telegramBotToken first, then message your bot and re-run." };
+            }
+            const r = await telegramChats(cfg.telegramBotToken);
+            if (!r.ok) return { exitCode: 1, stderr: `getUpdates failed — ${r.detail}` };
+            if (r.chats.length === 0) {
+              return { exitCode: 0, stdout: "No recent chats. Send a message to your bot in Telegram, then re-run `bb inbox chats`." };
+            }
+            const lines = r.chats.map(
+              (c) => `${c.chatId}  ${c.name}${c.lastText ? `  — "${truncate(c.lastText, 40)}"` : ""}`,
+            );
+            lines.push(
+              "\nSet it with: bb plugin config inbox set telegramChatId <id>",
+            );
+            return { exitCode: 0, stdout: lines.join("\n") };
+          }
+
+          case "task":
+          case "add": {
+            const title = rest.join(" ").trim();
+            if (!title) {
+              return { exitCode: 1, stderr: "Usage: bb inbox task <what to do>" };
+            }
+            const task = await trackerAdd(bb, title);
+            return { exitCode: 0, stdout: `Added #${task.seq} ${task.title}` };
+          }
+
+          case "tasks": {
+            const { tasks } = await trackerList(bb, "today");
+            if (tasks.length === 0) {
+              return { exitCode: 0, stdout: "No tasks for today." };
+            }
+            const lines = tasks.map(
+              (t) => `${t.status === "done" ? "[x]" : "[ ]"} #${t.seq} ${t.title}`,
+            );
+            return { exitCode: 0, stdout: lines.join("\n") };
+          }
+
+          case "done": {
+            const seq = Number(rest[0]);
+            if (!Number.isInteger(seq)) {
+              return { exitCode: 1, stderr: "Usage: bb inbox done <task number>" };
+            }
+            const task = await trackerComplete(bb, seq);
+            return task
+              ? { exitCode: 0, stdout: `Done: ${task.title}` }
+              : { exitCode: 1, stderr: `No open task #${seq}.` };
+          }
+
+          case "help":
+            return { exitCode: 0, stdout: HELP };
+
+          default:
+            return { exitCode: 1, stderr: `Unknown command "${sub}".\n\n${HELP}` };
+        }
+      } catch (error) {
+        return {
+          exitCode: 1,
+          stderr: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+  });
+
+  bb.onDispose(() => {
+    disposed = true;
+    if (debounceTimer) clearTimeout(debounceTimer);
+    bb.log.info("inbox disposed");
+  });
+}
+
+// ---------------------------------------------------------------------------
+// helpers
+// ---------------------------------------------------------------------------
+
+function parseHhmm(value: string): number | null {
+  const m = value.trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h > 23 || min > 59) return null;
+  return h * 60 + min;
+}
+
+function truncate(value: string, max: number): string {
+  return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
+}
+
+function formatTasks(tasks: TrackerTask[], today: string): string {
+  if (tasks.length === 0) {
+    return "✅ No tasks for today. Add one: <code>/task buy milk</code>";
+  }
+  const lines = tasks.map((t) => {
+    const box = t.status === "done" ? "✅" : "⬜️";
+    const due =
+      t.dueDate && t.dueDate !== today ? ` <i>(due ${t.dueDate})</i>` : "";
+    return `${box} <b>#${t.seq}</b> ${escapeHtml(t.title)}${due}`;
+  });
+  const open = tasks.filter((t) => t.status === "open").length;
+  return `<b>Today's tasks</b>\n${lines.join("\n")}\n\n${open} open — <code>/done &lt;n&gt;</code> to complete`;
+}
+
+const HELP_TG = `👋 <b>bb inbox</b>
+I ping you when a thread needs you — <b>reply</b> to a notification to answer it (a question, or yes/no to approve).
+
+<b>Inbox</b>
+/list — threads needing you
+
+<b>Tasks</b>
+/task &lt;text&gt; — add a task
+/tasks — today's tasks
+/done &lt;n&gt; — complete task #n`;
+
+/** Sleep that resolves early when the service is aborted. */
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    signal.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true },
+    );
+  });
+}
+
+const HELP = `bb inbox — threads that need you
+
+  bb inbox list [--all]     list threads needing you (--all includes finished)
+  bb inbox dismiss <n>      hide an item until its next update
+  bb inbox status           show notification configuration
+  bb inbox test [--desktop|--telegram]   send a test notification
+  bb inbox chats            list Telegram chat ids (after messaging your bot)
+
+Setup Telegram (mobile):
+  1. @BotFather → /newbot → copy the token
+  2. bb plugin config inbox set telegramBotToken <token>
+  3. Message your bot once, then: bb inbox chats
+  4. bb plugin config inbox set telegramChatId <id>
+  5. bb inbox test`;
