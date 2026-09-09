@@ -1,101 +1,95 @@
-# bb-plugin-inbox
+# Needs You for BB
 
-A BB plugin.
+One inbox for questions, failed runs, and finished threads. Open the right
+conversation, keep finished work until you dismiss it, and receive one popup
+per thread. Popups stay quiet while you are reading that thread.
 
-## UI components
-
-`components/ui/` is vendored source you own (the shadcn model): edit the
-files freely — they never update out from under you. Add more from the BB
-component registry (the full shadcn set, version-matched to your BB install
-via the pinned ref in `components.json`):
-
-```
-npx shadcn add @bb/dialog @bb/select
-```
-
-Run `npm install` once before `bb plugin build` — the vendored components'
-npm deps bundle into your dist. React, and BB-shimmed packages like the
-radix portal primitives and `sonner` (`import { toast } from "sonner"`
-reaches BB's own toaster), are provided by the BB app at runtime and never
-bundled. Ship `dist/` (npm tarball or committed for git installs) so
-people installing your plugin never need npm.
-
-## Manifest
-
-`package.json` is the plugin manifest. Notable fields:
-
-- `bb.server` — backend entry (required); optional `bb.app` for a frontend.
-- `bb.name` and `bb.description` — required human-facing identity.
-- `bb.branding` — required; declare `icon` as a BB icon name or a
-  plugin-relative compact SVG, or declare `logo.light` (with optional
-  `logo.dark`). Logo assets must be relative `.svg`, `.png`, or
-  `.webp` files.
-- `engines.bb` — supported bb app version range.
-- `engines.bbPluginSdk` — the lowest plugin SDK you need (scaffold:
-  `>=0.4.8`). BB reads this as a floor, not a ceiling: a later
-  SDK in the same major still loads your plugin.
-- `dependencies` — every package your source imports that BB does not provide.
-  `bb plugin build` inlines them into `dist/`, and git installs resolve this
-  list alone, so a build-required package here rather than in
-  `devDependencies` is what keeps your plugin installable. `devDependencies`
-  is for types and tooling only (BB shims React, the portal primitives, and
-  `@get-bb/plugin-sdk` at runtime — never bundle them).
-
-Run `bb plugin build` before publishing git/npm installs. It writes
-`dist/server.js` + `server.meta.json` (and, with `bb.app`, `app.js` /
-`app.css` / `app.meta.json`). Each `*.meta.json` stamps SDK major/version,
-`artifactFormatVersion`, `pluginId`, `pluginVersion`, and
-`builtWith` so managed installs can verify the artifacts.
+**Public beta · 0.2.0-beta.1.** Requires BB 0.41+ and Node 24+ on its host.
+The inbox needs no separate account, token, or other plugin.
 
 ## Install
 
-From this directory (`bb plugin new` already ran the install; a fresh clone
-needs it):
+Run this in a terminal on the machine running BB:
 
-```
-npm install
-bb plugin install .
+```sh
+bb plugin install git:https://github.com/notpritam/bb-plugin-inbox.git@v0.2.0-beta.1
 ```
 
-After editing sources, reload:
+Review BB's installation prompt, then open **Needs You** in the sidebar.
+The release includes its built files; you do not need npm to install it.
 
-```
-bb plugin reload inbox
-```
+Questions and failed runs notify by default. To also receive completion alerts:
 
-## Configure
-
-```
-bb plugin config inbox
-bb plugin config inbox set greeting hi
+```sh
+bb plugin config inbox set notifyFinished true
 ```
 
-## Types & API reference
+The internal plugin ID is `inbox`. Closing a popup leaves the inbox entry in
+place; dismissing an inbox entry hides it until that thread has a new update.
 
-The plugin API ships as the npm package `@get-bb/plugin-sdk`, pinned to an
-exact version in `devDependencies` (`0.4.8` — the SDK of the BB
-that scaffolded this plugin). After `npm install`, the full surface is on disk
-at:
+## Optional Telegram notifications
 
+Each person uses their own bot and their own BB installation. Guided pairing
+is not included in this beta; configuration is manual.
+
+1. Open [@BotFather](https://t.me/BotFather) in Telegram and use `/newbot`.
+   Choose a bot name and username; BotFather gives you its token.
+2. In BB, open **Settings → Plugins → Needs You** and enter the token in
+   **Telegram bot token**. Keep it private; do not post it in a chat or issue.
+3. Open your new bot in Telegram and press **Start** (or send it a message).
+4. Run `bb inbox chats` on the BB machine. Find your private chat and enter
+   its ID in **Telegram chat id** in the same settings. Use a dedicated bot
+   that is not connected to another application.
+5. Keep Telegram notifications enabled and run:
+
+   ```sh
+   bb inbox test --telegram
+   ```
+
+Confirm the test arrives on your phone. To open BB links from a phone, enable
+BB Connect on your BB installation. A localhost link only works on its host.
+Telegram replies, remote approvals, and Telegram task commands are unavailable
+in this beta; respond to requests inside BB.
+
+To disconnect Telegram, unset `telegramBotToken` and `telegramChatId` in BB's
+plugin settings. The inbox and in-app alerts keep working.
+
+## Beta limits
+
+- The inbox works at desktop and compact widths. Bottom popups currently mount
+  with BB's desktop sidebar accessory; use the inbox itself on compact clients.
+- Native desktop notifications require macOS on the BB server host. They are
+  not browser push notifications on a remotely connected laptop.
+- Quiet hours use the BB server's timezone and are checked on thread changes.
+  Finished notifications have a 45-second cooldown; delivery is best effort.
+- Telegram receives thread titles and the displayed request context. The bot
+  token stays in BB's server-side secret settings. Dismissal and notification
+  history stay in the local BB installation. No author-operated relay is used.
+- Optional task CLI commands require Atlas; the inbox does not.
+
+## Update or remove
+
+This command pins an exact beta tag. Install the next published tag when you
+want to update; tags will not be moved. To remove Needs You:
+
+```sh
+bb plugin remove inbox
 ```
-node_modules/@get-bb/plugin-sdk/bundled-types/bb-plugin-sdk.d.ts      # backend
-node_modules/@get-bb/plugin-sdk/bundled-types/bb-plugin-sdk-app.d.ts  # frontend
+
+BB deletes this plugin's saved settings and credentials when it is removed.
+
+## Development
+
+```sh
+npm ci
+npm run typecheck
+npm test
+npm run build
 ```
 
-Your editor and `tsc` resolve `@get-bb/plugin-sdk` there through ordinary node
-resolution — no path mapping. These are readable declarations: open them for an
-exact signature.
+Commit matching `dist/` files for Git installation. See [CHANGELOG.md](CHANGELOG.md)
+for release changes. [Report a problem](https://github.com/notpritam/bb-plugin-inbox/issues)
+without including tokens or private thread content.
 
-The SDK surface grows with every BB release, so the pin has to track the BB you
-actually run:
-
-```
-bb plugin types          # sync this plugin's SDK surface to the running BB
-bb plugin types --check  # CI: fail when it does not match
-```
-
-Ask BB to write plugins for you: the `bb-plugin-authoring` skill documents
-the whole surface with examples.
-
-Confused by the API, or need something the types don't explain? Clone the BB
-repo and read the source: <https://github.com/get-bb/bb>.
+Attention detection draws on `bb-plugin-attention`; notification deduplication
+and BB Connect links draw on `bb-plugin-ntfy`, both by Shane Logsdon (MIT).

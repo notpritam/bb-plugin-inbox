@@ -1,14 +1,15 @@
 {
   "name": "bb-plugin-inbox",
-  "version": "0.1.0",
+  "version": "0.2.0-beta.1",
   "type": "module",
   "engines": {
-    "bb": ">=0.39",
-    "bbPluginSdk": ">=0.4.8"
+    "node": ">=24",
+    "bb": ">=0.41.0",
+    "bbPluginSdk": ">=0.4.21"
   },
   "bb": {
     "name": "Needs You",
-    "description": "Attention inbox + Telegram control: get pinged (desktop & Telegram) only when a thread needs you, answer questions and approvals from your phone, and manage daily tasks — quiet during long runs.",
+    "description": "One inbox for BB threads that need attention, with optional Telegram notifications.",
     "branding": {
       "icon": "./assets/icon.svg"
     },
@@ -19,21 +20,51 @@
     "@hugeicons/core-free-icons": "^4.1.3",
     "@hugeicons/react": "^1.1.6",
     "@radix-ui/react-slot": "^1.3.0",
-    "class-variance-authority": "^0.7.1",
-    "clsx": "^2.1.1",
-    "tailwind-merge": "^3.4.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@get-bb/plugin-sdk": "0.4.8",
+    "@get-bb/plugin-sdk": "0.4.21",
+    "@pierre/diffs": "^1.2.9",
+    "@radix-ui/react-alert-dialog": "^1.1.19",
+    "@radix-ui/react-context-menu": "^2.3.3",
+    "@radix-ui/react-dialog": "^1.1.19",
+    "@radix-ui/react-dropdown-menu": "^2.1.20",
+    "@radix-ui/react-hover-card": "^1.1.19",
+    "@radix-ui/react-menubar": "^1.1.20",
+    "@radix-ui/react-navigation-menu": "^1.2.18",
+    "@radix-ui/react-popover": "^1.1.19",
+    "@radix-ui/react-select": "^2.3.3",
+    "@radix-ui/react-tooltip": "^1.2.12",
+    "@testing-library/react": "16.3.2",
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "better-sqlite3": "^12.0.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "cron-parser": "5.10.0",
+    "esbuild": "0.28.1",
     "hono": "^4.11.9",
-    "sonner": "^1.5.0",
+    "jsdom": "29.0.1",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "sonner": "^1.7.4",
+    "tailwind-merge": "^3.4.0",
     "typescript": "^5.7.0",
-    "@radix-ui/react-dialog": "^1.1.19"
-  }
+    "vaul": "^1.1.2"
+  },
+  "description": "One inbox for BB threads that need attention, with optional Telegram notifications.",
+  "author": "Pritam Sharma",
+  "homepage": "https://notpritam.in/plugins/needs-you",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/notpritam/bb-plugin-inbox.git"
+  },
+  "scripts": {
+    "build": "bb plugin build",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import ./tests/register.mjs --test tests/*.test.mjs"
+  },
+  "license": "MIT"
 }

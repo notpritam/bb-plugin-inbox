@@ -21,29 +21,17 @@ import {
   sendDesktop,
   sendTelegram,
   telegramChats,
-  telegramGetUpdates,
   threadUrl,
   type TelegramConfig,
 } from "./notify";
-import { routeReply } from "./reply";
 import {
   trackerAdd,
   trackerComplete,
   trackerList,
-  type TrackerTask,
 } from "./tracker";
 
 const NOTI_PREFIX = "noti:";
 const LAST_FINISHED_KEY = "last-finished-noti";
-const TGMAP_PREFIX = "tgmap:";
-const TG_OFFSET_KEY = "tg-offset";
-const TGMAP_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-
-interface TgMapRecord {
-  threadId: string;
-  ts: number;
-}
-
 interface NotiRecord {
   at: number;
   kind: AttentionKind;
@@ -76,6 +64,7 @@ export const rpcContract = defineRpcContract({
     input: z.null(),
     output: z.object({
       desktop: z.boolean(),
+      toast: z.boolean(),
       telegram: z.boolean(),
       notifyBlocked: z.boolean(),
       notifyFailed: z.boolean(),
@@ -120,14 +109,14 @@ export default async function plugin(bb: BbPluginApi) {
       label: "Desktop notifications (macOS)",
       default: true,
     },
+    toastEnabled: {
+      type: "boolean",
+      label: "In-app toast (bottom-right popup inside bb)",
+      default: true,
+    },
     telegramInstant: {
       type: "boolean",
       label: "Instant Telegram push on new blocks/failures",
-      default: true,
-    },
-    telegramReplies: {
-      type: "boolean",
-      label: "Let me reply from Telegram (answers/approvals flow back to bb)",
       default: true,
     },
     telegramBotToken: {
@@ -192,15 +181,6 @@ export default async function plugin(bb: BbPluginApi) {
     return map;
   }
 
-  async function pruneTgMap(): Promise<void> {
-    const cutoff = Date.now() - TGMAP_TTL_MS;
-    for (const key of await bb.storage.kv.list(TGMAP_PREFIX)) {
-      const rec = await bb.storage.kv.get<TgMapRecord>(key);
-      if (rec && rec.ts < cutoff) await bb.storage.kv.delete(key);
-    }
-  }
-
-
   // ----- notification dispatch -----------------------------------------
 
   async function deeplink(item: AttentionItem): Promise<string | undefined> {
@@ -216,6 +196,7 @@ export default async function plugin(bb: BbPluginApi) {
     item: AttentionItem,
     cfg: Awaited<ReturnType<typeof settings.get>>,
   ): Promise<void> {
+    if (item.kind === "finished" && item.notificationEligible === false) return;
     const enabled =
       item.kind === "blocked"
         ? cfg.notifyBlocked
@@ -240,6 +221,22 @@ export default async function plugin(bb: BbPluginApi) {
       ? `${item.label} — ${truncate(item.detail, 200)}`
       : item.label;
 
+    // In-app toast: a bottom-right popup inside bb, delivered over realtime to
+    // any open client. Fires here (past the enabled/quiet/dedupe/cooldown gates)
+    // so it pops exactly once per new attention, like the desktop/Telegram pings.
+    if (cfg.toastEnabled) {
+      bb.realtime.publish("inbox:toast", {
+        threadId: item.threadId,
+        projectId: item.projectId,
+        kind: item.kind,
+        title,
+        label: item.label,
+        detail: item.detail ?? null,
+        attentionAt: item.attentionAt,
+        at: Date.now(),
+      });
+    }
+
     if (cfg.desktopEnabled && desktopAvailable()) {
       await sendDesktop(`bb: ${title}`, body, item.label);
     }
@@ -249,21 +246,10 @@ export default async function plugin(bb: BbPluginApi) {
       const url = await deeplink(item);
       const emoji =
         item.kind === "error" ? "🚨" : item.kind === "blocked" ? "🙋" : "🔔";
-      const hint =
-        item.kind === "blocked" && cfg.telegramReplies
-          ? "\n<i>Reply to this message to answer.</i>"
-          : "";
-      const text = `${emoji} <b>${escapeHtml(title)}</b>\n${escapeHtml(body)}${hint}`;
+      const text = `${emoji} <b>${escapeHtml(title)}</b>\n${escapeHtml(body)}`;
       const res = await sendTelegram(tg, text, url);
       if (!res.ok) {
         bb.log.warn(`telegram send failed: ${res.detail}`);
-      } else if (res.messageId !== undefined) {
-        // Map this message so a reply to it routes to this thread.
-        await bb.storage.kv.set(`${TGMAP_PREFIX}${res.messageId}`, {
-          threadId: item.threadId,
-          ts: Date.now(),
-        } satisfies TgMapRecord);
-        await pruneTgMap();
       }
     }
 
@@ -371,147 +357,7 @@ export default async function plugin(bb: BbPluginApi) {
     },
   });
 
-  // ----- Telegram inbound (reply from your phone) ----------------------
-
-  async function snapshotText(): Promise<string> {
-    const dismissed = await loadDismissed();
-    const snap = await buildSnapshot(bb, { dismissed, includeFinished: false });
-    if (snap.items.length === 0) return "✅ Nothing needs you right now.";
-    const lines = snap.items.map((item, i) => {
-      const mark = item.kind === "error" ? "🚨" : "🙋";
-      return `${i + 1}. ${mark} <b>${escapeHtml(item.title)}</b>\n   ${escapeHtml(item.label)}${item.detail ? ` — ${escapeHtml(truncate(item.detail, 100))}` : ""}`;
-    });
-    return `<b>${snap.total} need you</b>\n\n${lines.join("\n\n")}\n\n<i>Reply to a notification to answer it.</i>`;
-  }
-
-  async function handleUpdate(
-    update: { chatId: string; text: string; replyToMessageId?: number },
-    tg: TelegramConfig,
-  ): Promise<void> {
-    if (update.chatId !== tg.chatId) return; // only the linked owner
-    const text = update.text.trim();
-
-    if (text.startsWith("/")) {
-      const cmd = (text.slice(1).split(/\s+/)[0] ?? "").toLowerCase();
-      const argStr = text.slice(1 + cmd.length).trim();
-      try {
-        if (cmd === "list" || cmd === "inbox") {
-          await sendTelegram(tg, await snapshotText());
-        } else if (cmd === "task" || cmd === "add") {
-          if (!argStr) {
-            await sendTelegram(tg, "Usage: <code>/task &lt;what to do&gt;</code>");
-          } else {
-            const task = await trackerAdd(bb, argStr);
-            await sendTelegram(
-              tg,
-              `📝 Added <b>#${task.seq}</b> ${escapeHtml(task.title)}`,
-            );
-          }
-        } else if (cmd === "todo" && argStr) {
-          const task = await trackerAdd(bb, argStr);
-          await sendTelegram(
-            tg,
-            `📝 Added <b>#${task.seq}</b> ${escapeHtml(task.title)}`,
-          );
-        } else if (cmd === "tasks" || cmd === "todos" || cmd === "todo") {
-          const { tasks, today } = await trackerList(bb, "today");
-          await sendTelegram(tg, formatTasks(tasks, today));
-        } else if (cmd === "done") {
-          const seq = Number(argStr);
-          if (!Number.isInteger(seq)) {
-            await sendTelegram(tg, "Usage: <code>/done &lt;task number&gt;</code>");
-          } else {
-            const task = await trackerComplete(bb, seq);
-            await sendTelegram(
-              tg,
-              task
-                ? `✅ Done: ${escapeHtml(task.title)}`
-                : `No open task #${seq}.`,
-            );
-          }
-        } else if (cmd === "start" || cmd === "help") {
-          await sendTelegram(tg, HELP_TG);
-        } else {
-          await sendTelegram(tg, "Unknown command. Try /help.");
-        }
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        await sendTelegram(
-          tg,
-          /not found|unknown plugin|not installed|disabled|no handler/i.test(msg)
-            ? "The task tracker plugin isn't available."
-            : `⚠️ ${escapeHtml(msg)}`,
-        );
-      }
-      return;
-    }
-
-    // Resolve which thread this reply targets.
-    let threadId: string | undefined;
-    if (update.replyToMessageId !== undefined) {
-      const rec = await bb.storage.kv.get<TgMapRecord>(
-        `${TGMAP_PREFIX}${update.replyToMessageId}`,
-      );
-      threadId = rec?.threadId;
-    }
-    if (!threadId) {
-      const blocked = (
-        await buildSnapshot(bb, { includeFinished: false })
-      ).items.filter((i) => i.kind === "blocked");
-      if (blocked.length === 1) {
-        threadId = blocked[0].threadId;
-      } else if (blocked.length === 0) {
-        await sendTelegram(
-          tg,
-          "Nothing is waiting on you right now. Reply to a notification to answer a specific thread.",
-        );
-        return;
-      } else {
-        await sendTelegram(
-          tg,
-          `${blocked.length} threads are waiting — reply to a specific notification to answer it, or send /list.`,
-        );
-        return;
-      }
-    }
-
-    const result = await routeReply(bb, threadId, text);
-    await sendTelegram(tg, result.message);
-    scheduleReconcile();
-  }
-
-  bb.background.service("telegram-inbound", {
-    async start(signal) {
-      while (!signal.aborted) {
-        const cfg = await settings.get();
-        const tg = telegramConfig(cfg);
-        if (!tg || !cfg.telegramReplies) {
-          await sleep(10_000, signal);
-          continue;
-        }
-        const offset = (await bb.storage.kv.get<number>(TG_OFFSET_KEY)) ?? 0;
-        const res = await telegramGetUpdates(tg.botToken, offset, 25, signal);
-        if (signal.aborted) break;
-        if (!res.ok) {
-          bb.log.warn(`telegram getUpdates failed: ${res.detail}`);
-          await sleep(5_000, signal);
-          continue;
-        }
-        if (res.nextOffset !== offset) {
-          await bb.storage.kv.set(TG_OFFSET_KEY, res.nextOffset);
-        }
-        for (const update of res.updates) {
-          try {
-            await handleUpdate(update, tg);
-          } catch (error) {
-            bb.log.error(
-              `inbound handling failed: ${error instanceof Error ? error.message : String(error)}`,
-            );
-          }
-        }
-      }
-    },
-  });
+  // Telegram is notification-only in this beta. Remote actions are not registered.
 
   // ----- RPC ------------------------------------------------------------
 
@@ -529,6 +375,7 @@ export default async function plugin(bb: BbPluginApi) {
       const cfg = await settings.get();
       return {
         desktop: cfg.desktopEnabled && desktopAvailable(),
+        toast: cfg.toastEnabled,
         telegram: telegramConfig(cfg) !== null,
         notifyBlocked: cfg.notifyBlocked,
         notifyFailed: cfg.notifyFailed,
@@ -574,7 +421,7 @@ export default async function plugin(bb: BbPluginApi) {
       { name: "list", summary: "List threads needing you", usage: "bb inbox list [--all]" },
       { name: "dismiss", summary: "Dismiss an item until its next update", usage: "bb inbox dismiss <n>" },
       { name: "status", summary: "Show notification config", usage: "bb inbox status" },
-      { name: "test", summary: "Send a test notification", usage: "bb inbox test [--desktop|--telegram]" },
+      { name: "test", summary: "Send a test notification", usage: "bb inbox test [--desktop|--telegram|--toast]" },
       { name: "chats", summary: "Discover your Telegram chat id", usage: "bb inbox chats" },
       { name: "task", summary: "Add a daily task (via the tracker plugin)", usage: "bb inbox task <what to do>" },
       { name: "tasks", summary: "List today's tasks", usage: "bb inbox tasks" },
@@ -631,6 +478,7 @@ export default async function plugin(bb: BbPluginApi) {
             const tg = telegramConfig(cfg);
             const lines = [
               `desktop:        ${cfg.desktopEnabled && desktopAvailable() ? "on" : "off"}`,
+              `in-app toast:   ${cfg.toastEnabled ? "on" : "off"}`,
               `telegram:       ${tg ? "configured" : "(not set)"}`,
               `  instant push: ${cfg.telegramInstant}`,
               `notify blocked: ${cfg.notifyBlocked}`,
@@ -642,9 +490,26 @@ export default async function plugin(bb: BbPluginApi) {
           }
 
           case "test": {
-            const wantDesktop = !has("--telegram");
-            const wantTelegram = !has("--desktop");
+            // With no flag, exercise every channel; a channel flag narrows it.
+            const wantDesktop = !has("--telegram") && !has("--toast");
+            const wantTelegram = !has("--desktop") && !has("--toast");
+            const wantToast = !has("--desktop") && !has("--telegram");
             const out: string[] = [];
+            if (wantToast) {
+              bb.realtime.publish("inbox:toast", {
+                threadId: "test",
+                projectId: "test",
+                kind: "blocked",
+                title: "Test — a thread needs you",
+                label: "Question for you",
+                detail: "Sample toast from `bb inbox test`.",
+                attentionAt: Date.now(),
+                at: Date.now(),
+              });
+              out.push(
+                "toast:    published (pops in any open bb window; bottom-right)",
+              );
+            }
             if (wantDesktop) {
               const r = await sendDesktop(
                 "bb inbox",
@@ -757,56 +622,12 @@ function truncate(value: string, max: number): string {
   return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
 }
 
-function formatTasks(tasks: TrackerTask[], today: string): string {
-  if (tasks.length === 0) {
-    return "✅ No tasks for today. Add one: <code>/task buy milk</code>";
-  }
-  const lines = tasks.map((t) => {
-    const box = t.status === "done" ? "✅" : "⬜️";
-    const due =
-      t.dueDate && t.dueDate !== today ? ` <i>(due ${t.dueDate})</i>` : "";
-    return `${box} <b>#${t.seq}</b> ${escapeHtml(t.title)}${due}`;
-  });
-  const open = tasks.filter((t) => t.status === "open").length;
-  return `<b>Today's tasks</b>\n${lines.join("\n")}\n\n${open} open — <code>/done &lt;n&gt;</code> to complete`;
-}
-
-const HELP_TG = `👋 <b>bb inbox</b>
-I ping you when a thread needs you — <b>reply</b> to a notification to answer it (a question, or yes/no to approve).
-
-<b>Inbox</b>
-/list — threads needing you
-
-<b>Tasks</b>
-/task &lt;text&gt; — add a task
-/tasks — today's tasks
-/done &lt;n&gt; — complete task #n`;
-
-/** Sleep that resolves early when the service is aborted. */
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) {
-      resolve();
-      return;
-    }
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true },
-    );
-  });
-}
-
 const HELP = `bb inbox — threads that need you
 
   bb inbox list [--all]     list threads needing you (--all includes finished)
   bb inbox dismiss <n>      hide an item until its next update
   bb inbox status           show notification configuration
-  bb inbox test [--desktop|--telegram]   send a test notification
+  bb inbox test [--desktop|--telegram|--toast]  send a test notification
   bb inbox chats            list Telegram chat ids (after messaging your bot)
 
 Setup Telegram (mobile):

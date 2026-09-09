@@ -17,6 +17,8 @@ export interface AttentionItem {
   detail?: string;
   attentionAt: number;
   updatedAt: number;
+  /** Internal delivery hint: retained/read completions are not new alerts. */
+  notificationEligible?: boolean;
 }
 
 export interface Snapshot {
@@ -32,14 +34,16 @@ type Interaction = Awaited<
   ReturnType<BbPluginApi["sdk"]["threads"]["interactions"]["list"]>
 >[number];
 
-// error first, then a live block on the user, then a finished-but-unread turn.
+// Errors first, then a live block, then retained finished work.
 const RANK: Record<AttentionKind, number> = {
   error: 0,
   blocked: 1,
   finished: 2,
 };
 
-const MAX_ITEMS = 25;
+const THREAD_PAGE_SIZE = 500;
+const FINISHED_PREFIX = "finished:";
+interface FinishedRecord { attentionAt: number }
 export const DISMISS_PREFIX = "dismiss:";
 
 function threadTitle(thread: ThreadDto): string {
@@ -59,24 +63,34 @@ function interactionMeta(interaction: Interaction): {
   if (payload.kind === "plugin") {
     return { label: "Awaiting your input", detail: payload.title };
   }
-  // provider approval
-  const subject = payload.subject;
-  if (subject.kind === "plan") {
-    return {
-      label: "Plan ready for review",
-      detail: subject.planFilePath ?? "Approve or revise the plan.",
-    };
+  if (payload.kind === "approval") {
+    const subject = payload.subject;
+    if (subject.kind === "plan") {
+      return {
+        label: "Plan ready for review",
+        detail: subject.planFilePath ?? "Approve or revise the plan.",
+      };
+    }
+    if (subject.kind === "command") {
+      return { label: "Needs approval", detail: subject.command };
+    }
+    if (subject.kind === "file_change") {
+      return {
+        label: "Needs approval",
+        detail: subject.writeScope ?? "Edit files",
+      };
+    }
+    if (subject.kind === "tool_use") {
+      return {
+        label: "Needs approval",
+        detail: subject.presentation.detail ?? subject.tool,
+      };
+    }
+    // permission_grant
+    return { label: "Needs approval", detail: subject.toolName ?? undefined };
   }
-  if (subject.kind === "command") {
-    return { label: "Needs approval", detail: subject.command };
-  }
-  if (subject.kind === "file_change") {
-    return {
-      label: "Needs approval",
-      detail: subject.writeScope ?? "Edit files",
-    };
-  }
-  return { label: "Needs approval", detail: subject.toolName ?? undefined };
+  // Generic provider/plugin interaction ({ kind: "ns/name", title, data }).
+  return { label: "Awaiting your input", detail: payload.title };
 }
 
 /**
@@ -96,9 +110,9 @@ export function classify(
   }
   if (
     thread.status === "idle" &&
-    thread.latestAttentionAt > (thread.lastReadAt ?? 0)
+    thread.latestAttentionAt > 0
   ) {
-    return { kind: "finished", label: "Turn finished — reply needed" };
+    return { kind: "finished", label: "Turn finished" };
   }
   return null;
 }
@@ -112,7 +126,7 @@ export interface SnapshotOptions {
   projectId?: string | null;
   /** thread id -> attentionAt already dismissed; items at/below are hidden. */
   dismissed?: Map<string, number>;
-  /** Include 'finished' (unread) items. Off = only error + blocked. */
+  /** Include retained finished items. Off = only error + blocked. */
   includeFinished?: boolean;
 }
 
@@ -121,11 +135,17 @@ export async function buildSnapshot(
   options: SnapshotOptions = {},
 ): Promise<Snapshot> {
   const { projectId, dismissed, includeFinished = true } = options;
-  const threads = await bb.sdk.threads.list({
-    projectId: projectId ?? undefined,
-    archived: false,
-    limit: 500,
-  });
+  const threads: ThreadDto[] = [];
+  for (let offset = 0; ; offset += THREAD_PAGE_SIZE) {
+    const page = await bb.sdk.threads.list({
+      projectId: projectId ?? undefined,
+      archived: false,
+      limit: THREAD_PAGE_SIZE,
+      offset,
+    });
+    threads.push(...page);
+    if (page.length < THREAD_PAGE_SIZE) break;
+  }
 
   const items: AttentionItem[] = [];
   for (const thread of threads) {
@@ -151,13 +171,25 @@ export async function buildSnapshot(
       }
     }
 
-    const classified = classify(thread, pending);
+    const record = await bb.storage.kv.get<FinishedRecord>(`${FINISHED_PREFIX}${thread.id}`);
+    const retained = record && Number.isFinite(record.attentionAt) && record.attentionAt > 0 ? record : undefined;
+    let classified = classify(thread, pending);
+    let attentionAt = thread.latestAttentionAt;
+    if (classified?.kind === "finished") {
+      if (retained?.attentionAt !== attentionAt) {
+        await bb.storage.kv.set(`${FINISHED_PREFIX}${thread.id}`, { attentionAt } satisfies FinishedRecord);
+      }
+    } else if (!classified && retained) {
+      // A read receipt or another running turn does not clear completed work.
+      classified = { kind: "finished", label: "Turn finished" };
+      attentionAt = retained.attentionAt;
+    }
     if (!classified) continue;
     if (classified.kind === "finished" && !includeFinished) continue;
 
     // Dismissed until a newer attention moment arrives.
     const dismissedAt = dismissed?.get(thread.id);
-    if (dismissedAt !== undefined && thread.latestAttentionAt <= dismissedAt) {
+    if (dismissedAt !== undefined && attentionAt <= dismissedAt) {
       continue;
     }
 
@@ -168,8 +200,11 @@ export async function buildSnapshot(
       kind: classified.kind,
       label: classified.label,
       ...(classified.detail ? { detail: classified.detail } : {}),
-      attentionAt: thread.latestAttentionAt,
+      attentionAt,
       updatedAt: thread.updatedAt,
+      notificationEligible: classified.kind !== "finished" || (
+        thread.status === "idle" && attentionAt > (thread.lastReadAt ?? 0)
+      ),
     });
   }
 
@@ -178,7 +213,7 @@ export async function buildSnapshot(
   );
 
   return {
-    items: items.slice(0, MAX_ITEMS),
+    items,
     total: items.length,
     generatedAt: Date.now(),
   };
