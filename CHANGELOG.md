@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0-beta.3 — 2026-09-09
+
+- Durable extension activity API, with one inbox item per review or job and deduplication across retries, dismissal, and reloads.
+- Guided Review completion/failure popups open the review directly and stay quiet when that review is already open.
+- Separate Extension activity setting; quiet hours and desktop/Telegram preferences apply.
+- Settings deep link and a close-button race fix for rapidly replaced notifications.
+- Developer integration guide for other BB extensions.
+
 ## 0.2.0-beta.2 — 2026-09-09
 
 - Optional first-run welcome with a persistent skip choice and an in-plugin Settings tab.

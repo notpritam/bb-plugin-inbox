@@ -7,7 +7,7 @@ import { createUpdates, updateRpc } from "./updates";
 
 const clockTime = z.string().regex(/^(?:|(?:[01]\d|2[0-3]):[0-5]\d)$/);
 export const preferencesSchema = z.object({
-  notifyBlocked: z.boolean(), notifyFailed: z.boolean(), notifyFinished: z.boolean(),
+  notifyBlocked: z.boolean(), notifyFailed: z.boolean(), notifyFinished: z.boolean(), notifyExtensions: z.boolean().default(true),
   toastEnabled: z.boolean(), desktopEnabled: z.boolean(), telegramInstant: z.boolean(),
   cooldownSeconds: z.number().int().min(0).max(86400),
   quietStart: clockTime, quietEnd: clockTime,
@@ -48,7 +48,7 @@ export function createSetup(bb: BbPluginApi, settings: { get(): Promise<StoredSe
       completed: (await bb.storage.kv.get<boolean>("setup:completed")) === true,
       version: packageInfo.version,
       preferences: {
-        notifyBlocked: cfg.notifyBlocked, notifyFailed: cfg.notifyFailed, notifyFinished: cfg.notifyFinished,
+        notifyBlocked: cfg.notifyBlocked, notifyFailed: cfg.notifyFailed, notifyFinished: cfg.notifyFinished, notifyExtensions: cfg.notifyExtensions,
         toastEnabled: cfg.toastEnabled, desktopEnabled: cfg.desktopEnabled, telegramInstant: cfg.telegramInstant,
         cooldownSeconds: Math.trunc(Math.max(0, Math.min(86400, Number(cfg.cooldownSeconds) || 0))),
         quietStart: quietValid ? cfg.quietStart : "",

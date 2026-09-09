@@ -77,11 +77,12 @@ export function SettingsView({ model, back }: { model: Model; back: () => void }
       duration: 5000, closeButton: true,
     });
   }
-  const labels: Array<[keyof Pick<Preferences, "notifyBlocked" | "notifyFailed" | "notifyFinished" | "toastEnabled" | "desktopEnabled" | "telegramInstant">, string, string]> = [
+  const labels: Array<[keyof Pick<Preferences, "notifyBlocked" | "notifyFailed" | "notifyFinished" | "notifyExtensions" | "toastEnabled" | "desktopEnabled" | "telegramInstant">, string, string]> = [
     ["notifyBlocked", "Questions and approvals", "When an agent needs your input."],
     ["notifyFailed", "Failed runs", "When a thread stops with an error."],
     ["notifyFinished", "Completed turns", "When an agent finishes. Off by default to keep things quiet."],
-    ["toastEnabled", "In-app popups", "One dismissible popup per thread, quiet while you’re viewing it. Desktop sidebar required."],
+    ["notifyExtensions", "Extension activity", "Notify when Guided Review and other extensions finish work. Items stay until dismissed."],
+    ["toastEnabled", "In-app popups", "One dismissible popup per thread or review, quiet while you’re viewing it. Desktop sidebar required."],
     ["desktopEnabled", "Native desktop notifications", state.desktopAvailable ? "Notifications on the Mac running BB." : "Requires a Mac running the BB server; unavailable on this host."],
     ["telegramInstant", "Telegram alerts", "Send selected alerts to your connected private chat."],
   ];

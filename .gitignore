@@ -8,3 +8,6 @@ node_modules/
 *.sqlite-*
 .DS_Store
 tests/compiled-app.mjs
+
+# Also ignore a shared dependency symlink in isolated checkouts.
+node_modules
