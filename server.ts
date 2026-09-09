@@ -31,6 +31,8 @@ import {
   trackerList,
 } from "./tracker";
 
+import { createActivities, activityItemSchema, activityRpc, type ActivityItem } from "./activity";
+
 const NOTI_PREFIX = "noti:";
 const LAST_FINISHED_KEY = "last-finished-noti";
 interface NotiRecord {
@@ -51,13 +53,14 @@ const zItem = z.object({
 
 export const rpcContract = defineRpcContract({
   ...setupRpc,
+  ...activityRpc,
   list: {
     input: z.object({
       projectId: z.string().nullable().default(null),
       includeFinished: z.boolean().default(true),
     }),
     output: z.object({
-      items: z.array(zItem),
+      items: z.array(z.union([zItem, activityItemSchema])),
       total: z.number().int(),
       generatedAt: z.number(),
     }),
@@ -100,6 +103,9 @@ export default async function plugin(bb: BbPluginApi) {
       type: "boolean",
       label: "Notify when a thread fails",
       default: true,
+    },
+    notifyExtensions: {
+      type: "boolean", label: "Notify when extensions finish work", default: true,
     },
     notifyFinished: {
       type: "boolean",
@@ -152,6 +158,7 @@ export default async function plugin(bb: BbPluginApi) {
   });
 
   const setup = createSetup(bb, settings);
+  const activities = createActivities(bb, notifyActivity);
 
   // ----- config helpers -------------------------------------------------
 
@@ -164,6 +171,31 @@ export default async function plugin(bb: BbPluginApi) {
     return start <= end
       ? minutes >= start && minutes < end
       : minutes >= start || minutes < end; // wraps past midnight
+  }
+
+  async function notifyActivity(item: ActivityItem, currentItem: () => boolean): Promise<void> {
+    const cfg = await settings.get();
+    if (!currentItem() || !cfg.notifyExtensions || (item.kind === "error" && !cfg.notifyFailed) || quietNow(cfg)) return;
+    if (cfg.toastEnabled) bb.realtime.publish("inbox:toast", { ...item, at: Date.now() });
+    if (cfg.desktopEnabled && desktopAvailable()) {
+      await sendDesktop(`bb: ${truncate(item.title, 90)}`, truncate(item.detail, 200), item.label);
+    }
+    await setup.telegram.withConnection(async current => {
+      if (!currentItem() || !current.notifyExtensions || !current.telegramInstant || (item.kind === "error" && !current.notifyFailed) || quietNow(current)) return;
+      const base = await resolveDeeplinkBaseUrl(bb.server.loopbackBaseUrl);
+      if (!currentItem()) return;
+      const result = await sendTelegram({ botToken: current.telegramBotToken, chatId: current.telegramChatId },
+        `<b>${escapeHtml(item.label)}</b>\n${escapeHtml(item.title)}\n${escapeHtml(item.detail)}`, `${base}${item.href}`);
+      if (!result.ok) bb.log.warn("Extension Telegram delivery failed; the item remains in Needs You.");
+    });
+  }
+
+  async function inboxSnapshot(options: Parameters<typeof buildSnapshot>[1] = {}) {
+    const snapshot = await buildSnapshot(bb, options);
+    const rank = { error: 0, blocked: 1, finished: 2 };
+    const items = [...snapshot.items, ...activities.list(options?.projectId, options?.includeFinished)]
+      .sort((a, b) => rank[a.kind] - rank[b.kind] || b.attentionAt - a.attentionAt);
+    return { ...snapshot, items, total: items.length };
   }
 
   async function loadDismissed(): Promise<Map<string, number>> {
@@ -273,7 +305,7 @@ export default async function plugin(bb: BbPluginApi) {
       includeFinished: true,
     });
     bb.realtime.publish("inbox", {
-      total: snapshot.total,
+      total: snapshot.total + activities.list().length,
       at: snapshot.generatedAt,
     });
     for (const item of snapshot.items) {
@@ -359,9 +391,10 @@ export default async function plugin(bb: BbPluginApi) {
 
   bb.rpc.register(rpcContract, {
     ...setup.handlers,
+    ...activities.handlers,
     async list({ projectId, includeFinished }) {
       const dismissed = await loadDismissed();
-      const snapshot = await buildSnapshot(bb, {
+      const snapshot = await inboxSnapshot({
         projectId,
         dismissed,
         includeFinished,
@@ -434,7 +467,7 @@ export default async function plugin(bb: BbPluginApi) {
           case undefined:
           case "list": {
             const dismissed = await loadDismissed();
-            const snap = await buildSnapshot(bb, {
+            const snap = await inboxSnapshot({
               dismissed,
               includeFinished: has("--all"),
             });
@@ -455,7 +488,7 @@ export default async function plugin(bb: BbPluginApi) {
           case "dismiss": {
             const n = Number(rest[0]);
             const dismissed = await loadDismissed();
-            const snap = await buildSnapshot(bb, {
+            const snap = await inboxSnapshot({
               dismissed,
               includeFinished: true,
             });
@@ -463,10 +496,8 @@ export default async function plugin(bb: BbPluginApi) {
             if (!item) {
               return { exitCode: 1, stderr: `No item ${rest[0] ?? ""}. Run \`bb inbox list\`.` };
             }
-            await bb.storage.kv.set(
-              `${DISMISS_PREFIX}${item.threadId}`,
-              item.attentionAt,
-            );
+            if ("id" in item) activities.handlers.dismissActivity({ id: item.id, attentionAt: item.attentionAt });
+            else await bb.storage.kv.set(`${DISMISS_PREFIX}${item.threadId}`, item.attentionAt);
             bb.realtime.publish("inbox", { total: -1, at: Date.now() });
             return { exitCode: 0, stdout: `Dismissed: ${item.title}` };
           }

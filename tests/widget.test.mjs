@@ -38,6 +38,7 @@ afterEach(async () => {
   if (mounted) mounted.lifecycle.unmount();
   mounted = undefined;
   cleanup();
+  window.history.replaceState({}, "", "/");
 });
 
 function event(threadId, attentionAt = 100) {
@@ -314,4 +315,46 @@ test('failed update checks show retry guidance without claiming the installation
   await screen.findByText(/Couldn’t check for updates/);
   assert.equal(screen.queryByRole('button',{name:'Update now',exact:true}),null);
   assert.equal(screen.getByRole('button',{name:'Check for updates',exact:true}).disabled,false);
+});
+
+const reviewEvent = (attentionAt = 100) => ({ id: 'activity:guided-review:pr-123', projectId: 'p1',
+  sourceName: 'Guided Review', href: '/plugins/guided-review/review/pr-123',
+  kind: 'finished', title: 'Review sign-in', label: 'Guided Review · Ready', detail: 'Your guide is ready.', attentionAt, at: 1000 });
+
+test('extension completion shows one dismissible popup with a review action, and stays quiet on that review', async () => {
+  const ui = mount(null);
+  await ui.emit(reviewEvent());
+  await screen.findByRole('button', { name: 'Open review' });
+  await ui.emit(reviewEvent(101));
+  assert.equal(activeToasts().length, 1);
+  fireEvent.click(screen.getByRole('button', { name: /close toast/i }));
+  await waitFor(() => assert.equal(activeToasts().length, 0));
+  await ui.emit(reviewEvent(101));
+  assert.equal(activeToasts().length, 0);
+  window.history.pushState({}, '', '/plugins/guided-review/review/pr-123');
+  await ui.emit(reviewEvent(102));
+  assert.equal(activeToasts().length, 0);
+  window.history.pushState({}, '', '/plugins/guided-review/review/another');
+  await ui.emit(reviewEvent(103));
+  assert.equal(activeToasts().length, 1);
+  window.history.pushState({}, '', '/plugins/guided-review/review/pr-123');
+  await waitFor(() => assert.equal(activeToasts().length, 0));
+});
+
+test('extension inbox dismissal uses its activity identity and never the thread RPC', async () => {
+  const item = { ...reviewEvent(), updatedAt: 100 };
+  let items = [item];
+  const slot = mountPanel({ list: () => ({ items, total: items.length, generatedAt: 0 }),
+    dismissActivity: input => { assert.deepEqual(input, { id: item.id, attentionAt: 100 }); items = []; return { ok: true }; } });
+  fireEvent.click(await screen.findByRole('button', { name: 'Dismiss Review sign-in' }));
+  await waitFor(() => assert.equal(screen.queryByRole('button', { name: 'Open Review sign-in' }) === null, true));
+  assert.equal(slot.inspection.rpcCalls.some(c => c.method === 'dismiss'), false);
+});
+
+test('unsafe extension toast destinations are ignored', async () => {
+  const ui = mount();
+  for (const href of ['https://evil.example', '//evil.example', '/plugins/guided-review/review/..', '/plugins/guided-review/review/%2E%2E', '/plugins/guided-review/review/%2f%2fevil.example']) {
+    await ui.emit({ ...reviewEvent(), href });
+  }
+  assert.equal(activeToasts().length, 0);
 });

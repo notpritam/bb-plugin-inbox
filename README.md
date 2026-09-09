@@ -4,7 +4,7 @@ One inbox for questions, failed runs, and finished threads. Open the right
 conversation, keep finished work until you dismiss it, and receive one popup
 per thread. Popups stay quiet while you are reading that thread.
 
-**Public beta · 0.2.0-beta.2.** Requires BB 0.41+ and Node 24+ on its host.
+**Public beta · 0.2.0-beta.3.** Requires BB 0.41+ and Node 24+ on its host.
 The inbox needs no separate account, token, or other plugin.
 
 ## Install
@@ -32,6 +32,17 @@ by default.
 
 The internal plugin ID is `inbox`. Closing a popup leaves the inbox entry in
 place; dismissing an inbox entry hides it until that thread has a new update.
+
+## Extension activity
+
+Guided Review 0.2.1+ sends an alert when a guide is ready or generation fails.
+Choose **Open review** to return directly to the guide. Repeated deliveries and
+regenerated guides share one inbox entry; completed work stays until dismissed.
+
+**Settings → Extension activity** is enabled by default and is separate from
+completed-thread alerts. Quiet hours and channel preferences still apply.
+Telegram is optional. Other extensions can use the same
+[activity API](docs/extension-activity.md).
 
 ## Optional Telegram notifications
 
@@ -84,7 +95,7 @@ You can also run `bb plugin update inbox`.
 For a direct install pinned to this exact beta:
 
 ```sh
-bb plugin install git:https://github.com/notpritam/bb-plugin-inbox.git@v0.2.0-beta.2
+bb plugin install git:https://github.com/notpritam/bb-plugin-inbox.git@v0.2.0-beta.3
 ```
 
 Published tags will not be moved. To remove Needs You:

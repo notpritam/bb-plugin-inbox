@@ -3,7 +3,7 @@
   "sdkVersion": "0.4.34",
   "artifactFormatVersion": 1,
   "pluginId": "inbox",
-  "pluginVersion": "0.2.0-beta.2",
+  "pluginVersion": "0.2.0-beta.3",
   "builtWith": {
     "bbVersion": "0.41.0",
     "pluginSdkVersion": "0.4.34"

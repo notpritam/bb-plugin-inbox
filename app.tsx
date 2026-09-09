@@ -19,10 +19,15 @@ import { INBOX_STYLES } from "./styles";
 import { NeedsYouMark } from "./components/needs-you-mark";
 import { SettingsView, useSetup, WelcomeSetup } from "./settings-view";
 
+import { isActivityHref, viewingActivity } from "./destinations";
+
 type Kind = "error" | "blocked" | "finished";
 
 interface Item {
-  threadId: string;
+  threadId?: string;
+  id?: string;
+  href?: string;
+  sourceName?: string;
   projectId: string;
   title: string;
   kind: Kind;
@@ -30,6 +35,12 @@ interface Item {
   detail?: string;
   attentionAt: number;
   updatedAt: number;
+}
+
+function itemKey(item: { id?: string; threadId?: string }): string { return item.id ?? item.threadId ?? ""; }
+function openItem(nav: BbNavigate, item: { href?: string; threadId?: string }) {
+  if (isActivityHref(item.href)) window.location.assign(item.href);
+  else if (item.threadId) openThread(nav, item.threadId);
 }
 
 interface ListResult {
@@ -148,19 +159,17 @@ function useInbox(includeFinished: boolean) {
   useRealtime("inbox", () => void load());
 
   const dismiss = useCallback(async (item: Item) => {
-    if (pendingDismissals.current.has(item.threadId)) return;
-    pendingDismissals.current.add(item.threadId);
+    if (pendingDismissals.current.has(itemKey(item))) return;
+    pendingDismissals.current.add(itemKey(item));
     setDismissing(new Set(pendingDismissals.current));
     try {
-      await rpc.call("dismiss", {
-        threadId: item.threadId,
-        attentionAt: item.attentionAt,
-      });
+      if (item.id) await rpc.call("dismissActivity", { id: item.id, attentionAt: item.attentionAt });
+      else if (item.threadId) await rpc.call("dismiss", { threadId: item.threadId, attentionAt: item.attentionAt });
       await load();
     } catch (err) {
       toast.error(errorMessage(err));
     } finally {
-      pendingDismissals.current.delete(item.threadId);
+      pendingDismissals.current.delete(itemKey(item));
       setDismissing(new Set(pendingDismissals.current));
     }
   }, [rpc, load]);
@@ -207,9 +216,9 @@ function ItemList({ items, dismiss, dismissing }: { items: Item[] } & InboxActio
   const nav = useBbNavigate();
   return (
     <ul className="ny-rows">
-      {items.map(item => <ItemRow key={item.threadId} item={item}
-        onOpen={() => openThread(nav, item.threadId)} onDismiss={() => void dismiss(item)}
-        dismissing={dismissing.has(item.threadId)} />)}
+      {items.map(item => <ItemRow key={itemKey(item)} item={item}
+        onOpen={() => openItem(nav, item)} onDismiss={() => void dismiss(item)}
+        dismissing={dismissing.has(itemKey(item))} />)}
     </ul>
   );
 }
@@ -242,13 +251,13 @@ function EmptyInbox() {
   return <div className="ny-empty">
     <span className="ny-empty-icon"><Icon name="CircleCheck" aria-hidden /></span>
     <h3>Nothing needs you right now.</h3>
-    <p>Questions and failed runs will appear here when a thread needs your attention.</p>
+    <p>Questions, failed runs, and completed extension work will appear here.</p>
   </div>;
 }
 
-function InboxPanel() {
+function InboxPanel({ subPath = "" }: { subPath?: string }) {
   const setup = useSetup();
-  const [view, setView] = useState<"inbox" | "settings">("inbox");
+  const [view, setView] = useState<"inbox" | "settings">(subPath === "settings" ? "settings" : "inbox");
   const inbox = useInbox(true);
   const items = inbox.data?.items ?? [];
   const failed = items.filter(item => item.kind === "error");
@@ -350,7 +359,10 @@ function InboxBadge() {
 
 // Payload of the `inbox:toast` realtime channel (server.ts `maybeNotify`).
 interface ToastEvent {
-  threadId: string;
+  threadId?: string;
+  id?: string;
+  href?: string;
+  sourceName?: string;
   projectId: string;
   kind: Kind;
   title: string;
@@ -364,7 +376,8 @@ function isToastEvent(payload: unknown): payload is ToastEvent {
   if (!payload || typeof payload !== "object") return false;
   const p = payload as Record<string, unknown>;
   return (
-    typeof p.threadId === "string" &&
+    ((typeof p.threadId === "string" && p.id === undefined && p.href === undefined) ||
+      (typeof p.id === "string" && p.id.startsWith("activity:") && p.threadId === undefined && isActivityHref(p.href))) &&
     typeof p.title === "string" &&
     typeof p.label === "string" &&
     typeof p.attentionAt === "number" && Number.isFinite(p.attentionAt) &&
@@ -388,7 +401,7 @@ function NeedsYouToaster() {
   const { threadId: activeThreadId } = useBbContext();
   const navRef = useRef(nav);
   const activeThreadRef = useRef(activeThreadId);
-  const visibleToasts = useRef(new Map<string, string>());
+  const visibleToasts = useRef(new Map<string, ToastEvent>());
   const dismissedToasts = useRef(new Set<string>());
   const latestAttention = useRef(new Map<string, number>());
   navRef.current = nav;
@@ -398,8 +411,8 @@ function NeedsYouToaster() {
   // Keep desktop/Telegram delivery and the unresolved inbox item independent.
   useEffect(() => {
     const removed: string[] = [];
-    for (const [id, threadId] of visibleToasts.current) {
-      if (threadId === activeThreadId) {
+    for (const [id, event] of visibleToasts.current) {
+      if ((event.threadId && event.threadId === activeThreadId) || viewingActivity(event.href)) {
         toast.dismiss(id);
         visibleToasts.current.delete(id);
         removed.push(id);
@@ -422,21 +435,32 @@ function NeedsYouToaster() {
     };
   }, []);
 
+  useEffect(() => {
+    const timer = setInterval(() => {
+      for (const [id, event] of visibleToasts.current) if (viewingActivity(event.href)) {
+        toast.dismiss(id);
+        visibleToasts.current.delete(id);
+      }
+    }, 500);
+    return () => clearInterval(timer);
+  }, []);
+
   const onEvent = useCallback((payload: unknown) => {
     if (!isToastEvent(payload)) return;
     const ev = payload;
-    const episode = `needs-you:${ev.threadId}:${ev.attentionAt}:${ev.kind}`;
+    const key = itemKey(ev);
+    const episode = `needs-you:${key}:${ev.attentionAt}:${ev.kind}`;
     if (
-      ev.threadId === activeThreadRef.current ||
+      (ev.threadId && ev.threadId === activeThreadRef.current) || viewingActivity(ev.href) ||
       dismissedToasts.current.has(episode) ||
-      ev.attentionAt < (latestAttention.current.get(ev.threadId) ?? -Infinity)
+      ev.attentionAt < (latestAttention.current.get(key) ?? -Infinity)
     ) return;
 
     // Reuse the visible popup, but give a new episode its own ID after closing.
     // Reusing a closing Sonner ID lets its exit animation remove the new alert.
-    const id = [...visibleToasts.current].find(([, threadId]) => threadId === ev.threadId)?.[0] ?? episode;
-    latestAttention.current.set(ev.threadId, ev.attentionAt);
-    visibleToasts.current.set(id, ev.threadId);
+    const id = [...visibleToasts.current].find(([, event]) => itemKey(event) === key)?.[0] ?? episode;
+    latestAttention.current.set(key, ev.attentionAt);
+    visibleToasts.current.set(id, ev);
     toast.message(() => <ToastContent event={ev} />, {
       className: "ny-toast",
       classNames: { content: "ny-toast-content", closeButton: "ny-toast-close", actionButton: "ny-toast-action" },
@@ -447,13 +471,15 @@ function NeedsYouToaster() {
       duration: ev.kind === "finished" ? 8000 : 15000,
       closeButton: true,
       onDismiss: () => {
-        dismissedToasts.current.add(episode);
+        // A new event can arrive before Sonner rerenders its close button.
+        const current = visibleToasts.current.get(id) ?? ev;
+        dismissedToasts.current.add(`needs-you:${itemKey(current)}:${current.attentionAt}:${current.kind}`);
         visibleToasts.current.delete(id);
       },
       onAutoClose: () => visibleToasts.current.delete(id),
       action: {
-        label: <>Open thread <Icon name="ArrowRight" aria-hidden /></>,
-        onClick: () => openThread(navRef.current, ev.threadId),
+        label: <>{ev.href ? (ev.sourceName === "Guided Review" ? "Open review" : "Open activity") : "Open thread"} <Icon name="ArrowRight" aria-hidden /></>,
+        onClick: () => openItem(navRef.current, ev),
       },
     });
   }, []);
