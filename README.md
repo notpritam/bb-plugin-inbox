@@ -9,10 +9,16 @@ The inbox needs no separate account, token, or other plugin.
 
 ## Install
 
-Run this in a terminal on the machine running BB:
+Add the marketplace once in a terminal on the machine running BB:
 
 ```sh
-bb plugin install git:https://github.com/notpritam/bb-plugin-inbox.git@v0.2.0-beta.1
+bb marketplace add git:github.com/notpritam/bb-marketplace@main
+```
+
+Open **Extensions**, search **Needs You**, and choose **Install**. Or run:
+
+```sh
+bb plugin install inbox@notpritam
 ```
 
 Review BB's installation prompt, then open **Needs You** in the sidebar.
@@ -70,8 +76,17 @@ plugin settings. The inbox and in-app alerts keep working.
 
 ## Update or remove
 
-This command pins an exact beta tag. Install the next published tag when you
-want to update; tags will not be moved. To remove Needs You:
+The marketplace tracks compatible release tags in `^0.2.0-beta.1`. Run
+`bb marketplace refresh notpritam` to discover new listings; refresh does not
+install or update code. Run `bb plugin update inbox` when you want to update.
+
+For a direct install pinned to this exact beta:
+
+```sh
+bb plugin install git:https://github.com/notpritam/bb-plugin-inbox.git@v0.2.0-beta.1
+```
+
+Published tags will not be moved. To remove Needs You:
 
 ```sh
 bb plugin remove inbox
