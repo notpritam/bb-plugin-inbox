@@ -293,3 +293,25 @@ test('notification settings save from the plugin and expose an opt-in update act
   assert.ok(screen.getByRole('button',{name:'Update now',exact:true}));
   assert.equal(mounted.inspection.rpcCalls.some(c=>c.method==='setupApplyUpdate'),false);
 });
+
+test('an update is applied only on click and a rollback remains recoverable', async () => {
+  let attempts=0;
+  mountPanel({setupCheckUpdates:()=>({...currentUpdate,outcome:'update-available',latestVersion:'v0.2.0-beta.3',candidateVersion:'new'}),
+    setupApplyUpdate:()=>{attempts++;return {outcome:'rolled-back',version:null}}});
+  await screen.findByText(/Update available/);
+  fireEvent.click(screen.getByRole('button',{name:'Settings',exact:true}));
+  assert.equal(attempts,0);
+  fireEvent.click(screen.getByRole('button',{name:'Update now',exact:true}));
+  await screen.findByRole('alert');
+  assert.equal(attempts,1);
+  assert.match(screen.getByRole('alert').textContent,/restored the previous version/);
+  assert.equal(screen.getByRole('button',{name:'Check for updates',exact:true}).disabled,false);
+});
+
+test('failed update checks show retry guidance without claiming the installation is current', async () => {
+  mountPanel({setupCheckUpdates:()=>{throw new Error('offline')}});
+  fireEvent.click(await screen.findByRole('button',{name:'Settings',exact:true}));
+  await screen.findByText(/Couldn’t check for updates/);
+  assert.equal(screen.queryByRole('button',{name:'Update now',exact:true}),null);
+  assert.equal(screen.getByRole('button',{name:'Check for updates',exact:true}).disabled,false);
+});
