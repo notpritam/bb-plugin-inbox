@@ -3,6 +3,7 @@
 // the actual thread on the user's phone.
 import { exec } from "node:child_process";
 import { platform } from "node:process";
+import { telegramRequest } from "./telegram-api";
 
 /**
  * Prefer bb connect's remote origin when this server is paired, so a deeplink
@@ -18,6 +19,7 @@ export async function resolveDeeplinkBaseUrl(
         method: "POST",
         headers: { "content-type": "application/json" },
         body: "null",
+        signal: AbortSignal.timeout(3000),
       },
     );
     if (!response.ok) return loopbackBaseUrl;
@@ -99,32 +101,13 @@ export async function sendTelegram(
       ? `${text}\n\n<a href="${escapeHtml(linkUrl)}">Open in bb</a>`
       : text;
   try {
-    const response = await fetch(
-      `https://api.telegram.org/bot${cfg.botToken}/sendMessage`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          chat_id: cfg.chatId,
-          text: body,
-          parse_mode: "HTML",
-          disable_web_page_preview: true,
-        }),
-      },
-    );
-    if (response.ok) {
-      const payload = (await response.json().catch(() => null)) as {
-        result?: { message_id?: number };
-      } | null;
-      return { ok: true, messageId: payload?.result?.message_id };
-    }
-    const detail = await response.text().catch(() => "");
-    return { ok: false, detail: `HTTP ${response.status}: ${detail}` };
+    const payload = await telegramRequest(cfg.botToken, "sendMessage", {
+      chat_id: cfg.chatId, text: body, parse_mode: "HTML", disable_web_page_preview: true,
+    }) as { message_id?: number };
+    if (!Number.isSafeInteger(payload?.message_id)) return { ok: false, detail: "Telegram did not acknowledge this notification." };
+    return { ok: true, messageId: payload.message_id };
   } catch (error) {
-    return {
-      ok: false,
-      detail: error instanceof Error ? error.message : String(error),
-    };
+    return { ok: false, detail: error instanceof Error ? error.message : "Telegram delivery failed." };
   }
 }
 
@@ -146,34 +129,15 @@ export async function telegramGetUpdates(
   signal?: AbortSignal,
 ): Promise<{ ok: boolean; updates: TelegramUpdate[]; nextOffset: number; detail?: string }> {
   try {
-    const url = new URL(`https://api.telegram.org/bot${botToken}/getUpdates`);
-    url.searchParams.set("timeout", String(timeoutSeconds));
-    if (offset > 0) url.searchParams.set("offset", String(offset));
-    url.searchParams.set("allowed_updates", JSON.stringify(["message"]));
-    const response = await fetch(url, { signal });
-    if (!response.ok) {
-      const detail = await response.text().catch(() => "");
-      return {
-        ok: false,
-        updates: [],
-        nextOffset: offset,
-        detail: `HTTP ${response.status}: ${detail}`,
-      };
-    }
-    const payload = (await response.json()) as {
-      ok: boolean;
-      result?: Array<{
-        update_id: number;
-        message?: {
-          text?: string;
-          chat?: { id: number | string };
-          reply_to_message?: { message_id?: number };
-        };
-      }>;
-    };
+    const result = await telegramRequest(botToken, "getUpdates", {
+      offset, timeout: Math.min(timeoutSeconds, 5), allowed_updates: ["message"],
+    }, signal) as Array<{ update_id: number; message?: {
+      text?: string; chat?: { id: number | string }; reply_to_message?: { message_id?: number };
+    } }>;
+    if (!Array.isArray(result)) throw new Error("Telegram returned an unexpected reply. Try again.");
     const updates: TelegramUpdate[] = [];
     let nextOffset = offset;
-    for (const raw of payload.result ?? []) {
+    for (const raw of result) {
       nextOffset = Math.max(nextOffset, raw.update_id + 1);
       const msg = raw.message;
       if (!msg?.chat || typeof msg.text !== "string") continue;
@@ -209,19 +173,11 @@ export async function telegramChats(
   botToken: string,
 ): Promise<{ ok: boolean; chats: TelegramChat[]; detail?: string }> {
   try {
-    const response = await fetch(
-      `https://api.telegram.org/bot${botToken}/getUpdates`,
-    );
-    if (!response.ok) {
-      const detail = await response.text().catch(() => "");
-      return { ok: false, chats: [], detail: `HTTP ${response.status}: ${detail}` };
-    }
-    const payload = (await response.json()) as {
-      ok: boolean;
-      result?: Array<{ message?: TelegramApiMessage; channel_post?: TelegramApiMessage }>;
-    };
+    const result = await telegramRequest(botToken, "getUpdates", { timeout: 0, limit: 100 }) as
+      Array<{ message?: TelegramApiMessage; channel_post?: TelegramApiMessage }>;
+    if (!Array.isArray(result)) throw new Error("Telegram returned an unexpected reply. Try again.");
     const byId = new Map<string, TelegramChat>();
-    for (const update of payload.result ?? []) {
+    for (const update of result) {
       const msg = update.message ?? update.channel_post;
       const chat = msg?.chat;
       if (!chat) continue;

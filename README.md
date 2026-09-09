@@ -4,7 +4,7 @@ One inbox for questions, failed runs, and finished threads. Open the right
 conversation, keep finished work until you dismiss it, and receive one popup
 per thread. Popups stay quiet while you are reading that thread.
 
-**Public beta · 0.2.0-beta.1.** Requires BB 0.41+ and Node 24+ on its host.
+**Public beta · 0.2.0-beta.2.** Requires BB 0.41+ and Node 24+ on its host.
 The inbox needs no separate account, token, or other plugin.
 
 ## Install
@@ -24,42 +24,37 @@ bb plugin install inbox@notpritam
 Review BB's installation prompt, then open **Needs You** in the sidebar.
 The release includes its built files; you do not need npm to install it.
 
-Questions and failed runs notify by default. To also receive completion alerts:
-
-```sh
-bb plugin config inbox set notifyFinished true
-```
+On first open, choose **Set up Telegram** or **Use inbox**. Setup is optional;
+your threads remain available. Open the plugin's **Settings** tab any time to
+change notifications, quiet hours, Telegram, or updates. Enable **Completed
+turns** and save if you want completion alerts; questions and failures are on
+by default.
 
 The internal plugin ID is `inbox`. Closing a popup leaves the inbox entry in
 place; dismissing an inbox entry hides it until that thread has a new update.
 
 ## Optional Telegram notifications
 
-Each person uses their own bot and their own BB installation. Guided pairing
-is not included in this beta; configuration is manual.
+Each person uses their own bot and their own BB installation.
 
-1. Open [@BotFather](https://t.me/BotFather) in Telegram and use `/newbot`.
-   Choose a bot name and username; BotFather gives you its token.
-2. In BB, open **Settings → Plugins → Needs You** and enter the token in
-   **Telegram bot token**, then click **Save settings**. Keep the token private;
-   do not post it in a chat or issue.
-3. Open your new bot in Telegram and press **Start** (or send it a message).
-4. Run `bb inbox chats` on the BB machine. Find your private chat and enter
-   its ID in **Telegram chat id** in the same settings, then click **Save settings**.
-   Use a dedicated bot that is not connected to another application.
-5. Keep Telegram notifications enabled and run:
+1. Open **Needs You → Settings**. Create a dedicated bot with
+   [@BotFather](https://t.me/BotFather) using `/newbot` and copy its token.
+2. Paste the token into **Telegram bot token** and choose **Connect bot**.
+   The token is masked, validated, and never returned from the server.
+3. Choose **Open bot in Telegram**, press **Start**, then return and choose
+   **I pressed Start**. The pairing link expires after 10 minutes.
+4. Check the displayed private chat and choose **Confirm this chat**.
+5. Choose **Send test notification** and confirm it arrives on your phone.
+   Finish setup when ready.
 
-   ```sh
-   bb inbox test --telegram
-   ```
+No chat-ID lookup command is needed. Use **Change bot** or **Disconnect** in
+Settings to manage the connection. Pairing and update checks send no messages;
+a test is sent only when you request it. Partial connection saves pause Telegram
+alerts until you reconnect successfully.
 
-Confirm the test arrives on your phone. To open BB links from a phone, enable
-BB Connect on your BB installation. A localhost link only works on its host.
-Telegram replies, remote approvals, and Telegram task commands are unavailable
+Enable BB Connect for links that open from a phone. A localhost link only works
+on its host. Telegram replies, remote approvals, and task commands are unavailable
 in this beta; respond to requests inside BB.
-
-To disconnect Telegram, unset `telegramBotToken` and `telegramChatId` in BB's
-plugin settings. The inbox and in-app alerts keep working.
 
 ## Beta limits
 
@@ -68,7 +63,7 @@ plugin settings. The inbox and in-app alerts keep working.
 - Native desktop notifications require macOS on the BB server host. They are
   not browser push notifications on a remotely connected laptop.
 - Quiet hours use the BB server's timezone and are checked on thread changes.
-  Finished notifications have a 45-second cooldown; delivery is best effort.
+  Finished notifications default to a 45-second cooldown, adjustable in Settings; delivery is best effort.
 - Telegram receives thread titles and the displayed request context. The bot
   token stays in BB's server-side secret settings. Dismissal and notification
   history stay in the local BB installation. No author-operated relay is used.
@@ -78,12 +73,18 @@ plugin settings. The inbox and in-app alerts keep working.
 
 The marketplace tracks compatible release tags in `^0.2.0-beta.1`. Run
 `bb marketplace refresh notpritam` to discover new listings; refresh does not
-install or update code. Run `bb plugin update inbox` when you want to update.
+install or update code. Needs You checks for updates when opened (cached for
+15 minutes). **Settings → Version & updates → Check for updates** forces a
+check. **Update now** asks BB to install the latest compatible release and
+preserves your preferences and Telegram connection. Finish or cancel pairing
+first. Pinned/local installs and incompatible or unavailable releases show
+specific guidance. Checks never auto-install; **Release notes** opens GitHub.
+You can also run `bb plugin update inbox`.
 
 For a direct install pinned to this exact beta:
 
 ```sh
-bb plugin install git:https://github.com/notpritam/bb-plugin-inbox.git@v0.2.0-beta.1
+bb plugin install git:https://github.com/notpritam/bb-plugin-inbox.git@v0.2.0-beta.2
 ```
 
 Published tags will not be moved. To remove Needs You:

@@ -84,6 +84,55 @@ export const INBOX_STYLES = `
 [data-sonner-toast].ny-toast [data-close-button].ny-toast-close:hover { color: var(--foreground); background: var(--muted); }
 [data-sonner-toast].ny-toast [data-close-button].ny-toast-close svg { width: 14px; height: 14px; }
 .ny-spinner { display: inline-block; width: 14px; height: 14px; border: 1.5px solid currentColor; border-inline-end-color: transparent; border-radius: 50%; animation: ny-spin 900ms linear infinite; }
+
+.ny-view-nav { display: flex; gap: 4px; padding: 3px; border: 1px solid var(--border); border-radius: 8px; }
+.ny-view-nav button { min-height: 36px; padding: 8px 12px; border: 0; border-radius: 5px; color: var(--muted-foreground); background: transparent; font: inherit; font-size: 12px; cursor: pointer; }
+.ny-view-nav button[aria-pressed="true"] { background: var(--muted); color: var(--foreground); }
+.ny-welcome { margin-bottom: 28px; padding: 20px; border: 1px solid var(--border); border-radius: 10px; background: var(--card, var(--background)); }
+.ny-welcome h3, .ny-settings h3 { margin: 0 0 8px; font-size: 17px; font-weight: 550; }
+.ny-welcome p, .ny-settings p, .ny-token-form li { font-size: 12px; line-height: 1.75; color: var(--muted-foreground); margin: 6px 0 12px; max-width: 70ch; }
+.ny-settings-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 6px 0 26px; }
+.ny-settings-top h3 { margin: 0; }
+.ny-settings h4 { font-size: 14px; font-weight: 600; margin: 0 0 18px; }
+.ny-settings-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 40px; }
+.ny-settings-columns > section { min-width: 0; }
+.ny-settings-fields { padding: 0; margin: 0; border: 0; min-width: 0; }
+.ny-setting-toggle { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; cursor: pointer; min-height: 44px; }
+.ny-setting-toggle input { width: 16px; height: 16px; margin-top: 3px; flex: none; accent-color: var(--primary); }
+.ny-setting-toggle strong { font-size: 12px; font-weight: 550; }
+.ny-setting-toggle small { display: block; margin-top: 3px; font-size: 11px; line-height: 1.6; color: var(--muted-foreground); }
+.ny-settings-field, .ny-settings-times label { display: flex; flex-direction: column; gap: 7px; font-size: 12px; line-height: 1.6; }
+.ny-settings input:not([type="checkbox"]) { min-width: 0; width: 100%; min-height: 42px; padding: 9px 11px; color: var(--foreground); background: var(--background); border: 1px solid var(--border); border-radius: 6px; font: inherit; }
+.ny-settings input:focus-visible { outline: 2px solid var(--ring, var(--foreground)); outline-offset: 2px; }
+.ny-settings-times { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; margin: 20px 0 8px; }
+.ny-settings-field input[type="number"] { max-width: 160px; }
+.ny-settings-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 14px; }
+.ny-primary, .ny-secondary { display: inline-flex; justify-content: center; align-items: center; min-height: 42px; padding: 9px 13px; border: 1px solid var(--border); border-radius: 6px; font: inherit; font-size: 12px; font-weight: 550; line-height: 1.6; cursor: pointer; text-decoration: none; }
+.ny-primary { background: var(--foreground); color: var(--background); }
+.ny-secondary { color: var(--foreground); background: var(--background); }
+.ny-primary:hover:not(:disabled) { opacity: .9; }
+.ny-secondary:hover:not(:disabled) { background: var(--muted); }
+.ny-primary:disabled, .ny-secondary:disabled { opacity: .55; cursor: default; }
+.ny-settings a:not(.ny-primary) { color: var(--foreground); text-decoration: underline; text-underline-offset: 3px; }
+.ny-token-form { margin-top: 18px; }
+.ny-token-form ol { padding-left: 20px; }
+.ny-token-form li { margin-bottom: 5px; }
+.ny-connection, .ny-pairing { margin: 16px 0; padding: 16px; border: 1px solid var(--border); border-radius: 8px; overflow-wrap: anywhere; }
+.ny-connection > strong, .ny-pairing > strong { font-size: 13px; font-weight: 550; }
+.ny-pairing-user { display: inline-block; margin-left: 6px; }
+.ny-cancel-pairing { margin-top: 12px; }
+.ny-disconnect { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 16px; }
+.ny-settings .ny-telegram-help { margin-top: 22px; }
+.ny-settings-feedback { padding: 12px 14px; margin: 0 0 20px !important; border: 1px solid var(--border); border-radius: 7px; font-size: 12px; line-height: 1.7; }
+.ny-settings-feedback[role="alert"] { color: var(--ny-error); }
+.ny-updates { margin-top: 34px; padding-top: 24px; border-top: 1px solid var(--border); }
+.ny-updates h4 { margin-bottom: 8px; }
+.ny-updates a { font-size: 12px; padding: 10px; }
+.ny-update-notice { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 12px 14px; margin-bottom: 20px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; background: var(--muted); }
+.ny-update-notice button, .ny-setup-error button { border: 0; background: transparent; color: inherit; text-decoration: underline; text-underline-offset: 3px; padding: 8px; cursor: pointer; }
+.ny-setup-error { font-size: 12px; color: var(--muted-foreground); }
+@container (max-width: 720px) { .ny-settings-columns { grid-template-columns: minmax(0, 1fr); gap: 32px; } }
+@container (max-width: 430px) { .ny-header { flex-wrap: wrap; } .ny-welcome { padding: 16px; } }
 @keyframes ny-spin { to { transform: rotate(360deg); } }
 @keyframes ny-pulse { 50% { opacity: .45; } }
 @container (max-width: 430px) {

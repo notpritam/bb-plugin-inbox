@@ -14527,6 +14527,574 @@ function date4(params) {
 // node_modules/zod/v4/classic/external.js
 config(en_default());
 
+// package.json
+var package_default = {
+  name: "bb-plugin-inbox",
+  version: "0.2.0-beta.2",
+  type: "module",
+  engines: {
+    node: ">=24",
+    bb: ">=0.41.0",
+    bbPluginSdk: ">=0.4.21"
+  },
+  bb: {
+    name: "Needs You",
+    description: "One inbox for BB threads that need attention, with optional Telegram notifications.",
+    branding: {
+      icon: "./assets/icon.svg"
+    },
+    server: "./server.ts",
+    app: "./app.tsx"
+  },
+  dependencies: {
+    "@hugeicons/core-free-icons": "^4.1.3",
+    "@hugeicons/react": "^1.1.6",
+    "@radix-ui/react-slot": "^1.3.0",
+    zod: "^4.3.6"
+  },
+  devDependencies: {
+    "@get-bb/plugin-sdk": "0.4.21",
+    "@pierre/diffs": "^1.2.9",
+    "@radix-ui/react-alert-dialog": "^1.1.19",
+    "@radix-ui/react-context-menu": "^2.3.3",
+    "@radix-ui/react-dialog": "^1.1.19",
+    "@radix-ui/react-dropdown-menu": "^2.1.20",
+    "@radix-ui/react-hover-card": "^1.1.19",
+    "@radix-ui/react-menubar": "^1.1.20",
+    "@radix-ui/react-navigation-menu": "^1.2.18",
+    "@radix-ui/react-popover": "^1.1.19",
+    "@radix-ui/react-select": "^2.3.3",
+    "@radix-ui/react-tooltip": "^1.2.12",
+    "@testing-library/react": "16.3.2",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "better-sqlite3": "^12.0.0",
+    "class-variance-authority": "^0.7.1",
+    clsx: "^2.1.1",
+    "cron-parser": "5.10.0",
+    esbuild: "0.28.1",
+    hono: "^4.11.9",
+    jsdom: "29.0.1",
+    react: "19.2.8",
+    "react-dom": "19.2.8",
+    sonner: "^1.7.4",
+    "tailwind-merge": "^3.4.0",
+    typescript: "^5.7.0",
+    vaul: "^1.1.2"
+  },
+  description: "One inbox for BB threads that need attention, with optional Telegram notifications.",
+  author: "Pritam Sharma",
+  homepage: "https://notpritam.in/plugins/needs-you",
+  repository: {
+    type: "git",
+    url: "https://github.com/notpritam/bb-plugin-inbox.git"
+  },
+  scripts: {
+    build: "bb plugin build",
+    typecheck: "tsc --noEmit",
+    test: "node --import ./tests/register.mjs --test tests/*.test.mjs"
+  },
+  license: "MIT"
+};
+
+// notify.ts
+import { exec } from "node:child_process";
+import { platform } from "node:process";
+
+// telegram-api.ts
+var TelegramError = class extends Error {
+};
+async function telegramRequest(token, method, body = {}, signal) {
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(8e3)]) : AbortSignal.timeout(8e3)
+    });
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 404) throw new TelegramError("Telegram rejected this bot token. Copy a current token from BotFather and try again.");
+      if (response.status === 409) throw new TelegramError("Another app is reading this bot\u2019s messages. Use a dedicated bot for Needs You.");
+      if (response.status === 403) throw new TelegramError("The bot cannot message this chat. Unblock it and press Start in Telegram, then try again.");
+      if (response.status === 429) throw new TelegramError("Telegram is limiting requests. Wait a moment, then try again.");
+      throw new TelegramError("Telegram could not complete the request. Try again shortly.");
+    }
+    const payload = await response.json();
+    if (payload?.ok !== true) throw new TelegramError("Telegram could not complete the request. Check the bot and try again.");
+    return payload.result;
+  } catch (error51) {
+    if (error51 instanceof TelegramError) throw error51;
+    throw new TelegramError("Couldn\u2019t reach Telegram. Check the BB host\u2019s connection and try again.");
+  }
+}
+
+// notify.ts
+async function resolveDeeplinkBaseUrl(loopbackBaseUrl) {
+  try {
+    const response = await fetch(
+      `${loopbackBaseUrl}/api/v1/plugins/connect/rpc/status`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "null",
+        signal: AbortSignal.timeout(3e3)
+      }
+    );
+    if (!response.ok) return loopbackBaseUrl;
+    const payload = await response.json();
+    if (typeof payload !== "object" || payload === null) return loopbackBaseUrl;
+    const rpc = payload;
+    if (rpc.ok !== true) return loopbackBaseUrl;
+    const result = rpc.result;
+    if (typeof result !== "object" || result === null) return loopbackBaseUrl;
+    const { paired, url: url2 } = result;
+    if (paired === true && typeof url2 === "string" && url2.length > 0) {
+      return url2.replace(/\/+$/, "");
+    }
+  } catch {
+  }
+  return loopbackBaseUrl;
+}
+function threadUrl(baseUrl, projectId, threadId) {
+  return `${baseUrl}/projects/${encodeURIComponent(projectId)}/threads/${encodeURIComponent(threadId)}`;
+}
+function desktopAvailable() {
+  return platform === "darwin";
+}
+function osaEscape(value) {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+async function sendDesktop(title, message, subtitle) {
+  if (!desktopAvailable()) {
+    return { ok: false, detail: `unsupported platform: ${platform}` };
+  }
+  const parts = [
+    `display notification "${osaEscape(message)}"`,
+    `with title "${osaEscape(title)}"`
+  ];
+  if (subtitle) parts.push(`subtitle "${osaEscape(subtitle)}"`);
+  const script = parts.join(" ");
+  return new Promise((resolve) => {
+    exec(`osascript -e '${script.replace(/'/g, "'\\''")}'`, (error51) => {
+      if (error51) resolve({ ok: false, detail: error51.message });
+      else resolve({ ok: true });
+    });
+  });
+}
+async function sendTelegram(cfg, text, linkUrl) {
+  const body = linkUrl && linkUrl.startsWith("http") ? `${text}
+
+<a href="${escapeHtml(linkUrl)}">Open in bb</a>` : text;
+  try {
+    const payload = await telegramRequest(cfg.botToken, "sendMessage", {
+      chat_id: cfg.chatId,
+      text: body,
+      parse_mode: "HTML",
+      disable_web_page_preview: true
+    });
+    if (!Number.isSafeInteger(payload?.message_id)) return { ok: false, detail: "Telegram did not acknowledge this notification." };
+    return { ok: true, messageId: payload.message_id };
+  } catch (error51) {
+    return { ok: false, detail: error51 instanceof Error ? error51.message : "Telegram delivery failed." };
+  }
+}
+async function telegramChats(botToken) {
+  try {
+    const result = await telegramRequest(botToken, "getUpdates", { timeout: 0, limit: 100 });
+    if (!Array.isArray(result)) throw new Error("Telegram returned an unexpected reply. Try again.");
+    const byId = /* @__PURE__ */ new Map();
+    for (const update of result) {
+      const msg = update.message ?? update.channel_post;
+      const chat = msg?.chat;
+      if (!chat) continue;
+      const name = chat.title ?? [chat.first_name, chat.last_name].filter(Boolean).join(" ") ?? chat.username ?? "(unknown)";
+      byId.set(String(chat.id), {
+        chatId: String(chat.id),
+        name,
+        lastText: msg?.text ?? ""
+      });
+    }
+    return { ok: true, chats: [...byId.values()] };
+  } catch (error51) {
+    return {
+      ok: false,
+      chats: [],
+      detail: error51 instanceof Error ? error51.message : String(error51)
+    };
+  }
+}
+function escapeHtml(value) {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// telegram-setup.ts
+import { createHash, randomBytes } from "node:crypto";
+var candidateSchema = external_exports.object({ chatId: external_exports.string(), name: external_exports.string(), username: external_exports.string().nullable() });
+var pairingSchema = external_exports.object({
+  id: external_exports.string(),
+  botUsername: external_exports.string(),
+  url: external_exports.string(),
+  expiresAt: external_exports.number(),
+  candidate: candidateSchema.nullable()
+});
+var telegramStatusSchema = external_exports.object({
+  configured: external_exports.boolean(),
+  chatId: external_exports.string().nullable(),
+  botUsername: external_exports.string().nullable(),
+  name: external_exports.string().nullable(),
+  lastTest: external_exports.object({ ok: external_exports.boolean(), at: external_exports.number() }).nullable()
+});
+var META_KEY = "setup:telegram";
+var SUSPENDED_KEY = "setup:telegram-suspended";
+var fingerprint = (token, chatId) => createHash("sha256").update(token).update("\0").update(chatId).digest("hex");
+function createTelegramSetup(bb, settings) {
+  let pending = null;
+  let expiry = null;
+  let queue = Promise.resolve();
+  let writing = false;
+  let operations = 0;
+  let updating = false;
+  const controller = new AbortController();
+  function clear() {
+    pending = null;
+    if (expiry) clearTimeout(expiry);
+    expiry = null;
+  }
+  bb.onDispose(() => {
+    controller.abort();
+    clear();
+  });
+  function serial(run) {
+    if (updating) return Promise.reject(new Error("An update is running. Reopen Settings after it finishes."));
+    operations++;
+    const next = queue.then(() => {
+      if (controller.signal.aborted) throw new Error("Needs You restarted. Open setup again.");
+      return run();
+    });
+    queue = next.then(() => {
+    }, () => {
+    });
+    return next.finally(() => {
+      operations--;
+    });
+  }
+  function requirePairing(id) {
+    if (!pending || pending.id !== id || pending.expiresAt <= Date.now()) {
+      if (pending?.expiresAt && pending.expiresAt <= Date.now()) clear();
+      throw new Error("This setup link expired or was replaced. Start again.");
+    }
+    return pending;
+  }
+  function publicPairing(p) {
+    return { id: p.id, botUsername: p.botUsername, url: p.url, expiresAt: p.expiresAt, candidate: p.candidate };
+  }
+  async function save(values) {
+    writing = true;
+    try {
+      await bb.storage.kv.set(SUSPENDED_KEY, true);
+      await bb.sdk.plugins.updateSettings({ pluginId: bb.pluginId, values });
+      await bb.storage.kv.delete(SUSPENDED_KEY);
+    } catch {
+      throw new Error("Couldn\u2019t save the Telegram connection. Alerts are paused; reconnect from Settings to recover.");
+    } finally {
+      writing = false;
+    }
+  }
+  async function status() {
+    const cfg = await settings.get();
+    const configured = !writing && !await bb.storage.kv.get(SUSPENDED_KEY) && Boolean(cfg.telegramBotToken && cfg.telegramChatId);
+    const stored = await bb.storage.kv.get(META_KEY);
+    const metadata = configured && stored?.fingerprint === fingerprint(cfg.telegramBotToken, cfg.telegramChatId) ? stored : null;
+    return {
+      configured,
+      chatId: configured ? cfg.telegramChatId : null,
+      botUsername: metadata?.botUsername ?? null,
+      name: metadata?.name ?? null,
+      lastTest: metadata?.lastTest ?? null
+    };
+  }
+  return {
+    status,
+    pairing: () => pending && pending.expiresAt > Date.now() ? publicPairing(pending) : null,
+    isPairing: () => operations > 0 || Boolean(pending && pending.expiresAt > Date.now()),
+    async withUpdate(run) {
+      if (updating) throw new Error("An update is already running.");
+      if (operations || pending && pending.expiresAt > Date.now()) throw new Error("Finish or cancel Telegram pairing before updating.");
+      updating = true;
+      try {
+        return await run();
+      } finally {
+        updating = false;
+      }
+    },
+    withConnection: (run) => serial(async () => {
+      const cfg = await settings.get();
+      if (!cfg.telegramBotToken || !cfg.telegramChatId || await bb.storage.kv.get(SUSPENDED_KEY)) return null;
+      return run({ ...cfg, telegramBotToken: cfg.telegramBotToken });
+    }),
+    isWriting: () => writing,
+    begin: (token) => serial(async () => {
+      token = token.trim();
+      if (!/^\d{5,15}:[A-Za-z0-9_-]{25,100}$/.test(token)) throw new Error("Paste the complete bot token from BotFather.");
+      const bot = external_exports.object({ is_bot: external_exports.literal(true), username: external_exports.string().regex(/^[A-Za-z0-9_]{5,32}$/) }).safeParse(await telegramRequest(token, "getMe", {}, controller.signal));
+      if (!bot.success) throw new Error("Telegram did not return a valid bot. Check the token and try again.");
+      const webhook = external_exports.object({ url: external_exports.string() }).safeParse(await telegramRequest(token, "getWebhookInfo", {}, controller.signal));
+      if (!webhook.success || webhook.data.url) throw new Error("This bot is connected to another app. Use a dedicated bot for Needs You.");
+      if (controller.signal.aborted) throw new Error("Needs You restarted. Open setup again.");
+      clear();
+      const id = randomBytes(16).toString("hex"), challenge = "ny_" + randomBytes(24).toString("hex");
+      pending = {
+        id,
+        token,
+        challenge,
+        botUsername: bot.data.username,
+        url: `https://t.me/${bot.data.username}?start=${challenge}`,
+        expiresAt: Date.now() + 10 * 6e4,
+        createdAt: Math.floor(Date.now() / 1e3),
+        offset: 0,
+        candidate: null
+      };
+      expiry = setTimeout(() => {
+        if (pending?.id === id) clear();
+      }, 10 * 6e4);
+      expiry.unref();
+      return publicPairing(pending);
+    }),
+    check: (id) => serial(async () => {
+      const p = requirePairing(id);
+      if (p.candidate) return publicPairing(p);
+      const raw = await telegramRequest(p.token, "getUpdates", { offset: p.offset, timeout: 0, limit: 100, allowed_updates: ["message"] }, controller.signal);
+      if (!Array.isArray(raw)) throw new Error("Telegram returned an unexpected reply. Try checking again.");
+      requirePairing(id);
+      for (const update of raw) {
+        if (!Number.isSafeInteger(update?.update_id) || update.update_id < p.offset) continue;
+        p.offset = Math.max(p.offset, update.update_id + 1);
+        const msg = update.message;
+        if (msg?.text !== `/start ${p.challenge}` || msg?.chat?.type !== "private" || msg?.from?.is_bot !== false || !Number.isSafeInteger(msg.chat.id) || msg.chat.id <= 0 || msg.from.id !== msg.chat.id || !Number.isFinite(msg.date) || msg.date < p.createdAt || msg.forward_origin || msg.forward_date) continue;
+        p.candidate = {
+          chatId: String(msg.chat.id),
+          name: [msg.from.first_name, msg.from.last_name].filter((v) => typeof v === "string").join(" ").slice(0, 100) || "Your private chat",
+          username: typeof msg.from.username === "string" ? msg.from.username.slice(0, 40) : null
+        };
+        break;
+      }
+      return publicPairing(p);
+    }),
+    confirm: (id) => serial(async () => {
+      const p = requirePairing(id);
+      if (!p.candidate) throw new Error("Open the bot and press Start before confirming your chat.");
+      await save({ telegramBotToken: p.token, telegramChatId: p.candidate.chatId });
+      await bb.storage.kv.set(META_KEY, { fingerprint: fingerprint(p.token, p.candidate.chatId), botUsername: p.botUsername, name: p.candidate.name });
+      clear();
+    }),
+    cancel: (id) => serial(async () => {
+      requirePairing(id);
+      clear();
+      return { ok: true };
+    }),
+    test: () => serial(async () => {
+      const cfg = await settings.get();
+      if (!cfg.telegramBotToken || !cfg.telegramChatId || await bb.storage.kv.get(SUSPENDED_KEY)) throw new Error("Connect Telegram before sending a test.");
+      const key = fingerprint(cfg.telegramBotToken, cfg.telegramChatId);
+      const stored = await bb.storage.kv.get(META_KEY);
+      const metadata = stored?.fingerprint === key ? stored : { fingerprint: key };
+      try {
+        const raw = await telegramRequest(cfg.telegramBotToken, "sendMessage", {
+          chat_id: cfg.telegramChatId,
+          text: "Needs You \u2014 test notification\nYour BB installation can send alerts to this chat. Return to Needs You to finish setup."
+        }, controller.signal);
+        if (!raw || typeof raw !== "object" || !("message_id" in raw) || !Number.isSafeInteger(raw.message_id)) throw new TelegramError("Telegram did not acknowledge this test. Try again.");
+        await bb.storage.kv.set(META_KEY, { ...metadata, lastTest: { ok: true, at: Date.now() } });
+        return { ok: true };
+      } catch (error51) {
+        await bb.storage.kv.set(META_KEY, { ...metadata, lastTest: { ok: false, at: Date.now() } });
+        throw error51;
+      }
+    }),
+    disconnect: () => serial(async () => {
+      clear();
+      await save({ telegramBotToken: null, telegramChatId: "" });
+      await bb.storage.kv.delete(META_KEY);
+    })
+  };
+}
+
+// updates.ts
+var updateSchema = external_exports.object({
+  outcome: external_exports.enum(["update-available", "current", "incompatible", "pinned", "unavailable"]),
+  installedVersion: external_exports.string(),
+  latestVersion: external_exports.string().nullable(),
+  candidateVersion: external_exports.string().nullable(),
+  detail: external_exports.string(),
+  checkedAt: external_exports.number()
+});
+var updateRpc = {
+  setupCheckUpdates: { input: external_exports.object({ force: external_exports.boolean().default(false) }), output: updateSchema },
+  setupApplyUpdate: {
+    input: external_exports.object({ candidateVersion: external_exports.string().min(1).max(512) }).strict(),
+    output: external_exports.object({ outcome: external_exports.enum(["updated", "current", "rolled-back"]), version: external_exports.string().nullable() })
+  }
+};
+function createUpdates(bb, withUpdate) {
+  let cache = null;
+  let checking = null;
+  let applying = false;
+  async function check2(force) {
+    if (checking) return checking;
+    if (!force && cache && Date.now() - cache.checkedAt < 15 * 6e4) return cache;
+    checking = (async () => {
+      try {
+        const entry = (await bb.sdk.plugins.checkUpdates({ pluginId: bb.pluginId })).find((e) => e.id === bb.pluginId);
+        if (!entry) throw new Error("missing result");
+        const detail = {
+          "update-available": "A compatible release is ready. Your preferences and Telegram connection stay in BB when you update.",
+          current: "You\u2019re on the latest compatible release.",
+          incompatible: "A newer release requires a newer BB or Node version. Update your BB host, then check again.",
+          pinned: "This installation is pinned or local. Install from the notpritam marketplace to follow compatible releases.",
+          unavailable: "Couldn\u2019t resolve updates for this installation. Try checking again."
+        }[entry.outcome];
+        cache = {
+          outcome: entry.outcome,
+          installedVersion: package_default.version,
+          latestVersion: entry.candidate?.display ?? entry.blocked?.version ?? null,
+          candidateVersion: entry.candidate?.version ?? null,
+          detail,
+          checkedAt: Date.now()
+        };
+        return cache;
+      } catch {
+        cache = null;
+        throw new Error("Couldn\u2019t check for updates. Check the BB host\u2019s connection and try again.");
+      } finally {
+        checking = null;
+      }
+    })();
+    return checking;
+  }
+  return {
+    setupCheckUpdates: ({ force }) => check2(force),
+    async setupApplyUpdate({ candidateVersion }) {
+      if (applying) throw new Error("An update is already running.");
+      applying = true;
+      try {
+        return await withUpdate(async () => {
+          if (checking) await checking;
+          const latest = await check2(true);
+          if (latest.outcome !== "update-available" || latest.candidateVersion !== candidateVersion) {
+            throw new Error("The available update changed or is blocked. Check again before updating.");
+          }
+          let result;
+          try {
+            result = await bb.sdk.plugins.applyUpdate({ pluginId: bb.pluginId });
+          } catch {
+            throw new Error("BB couldn\u2019t complete the update. Check for updates before trying again.");
+          }
+          cache = null;
+          return { outcome: result.outcome, version: result.to?.display ?? null };
+        });
+      } finally {
+        applying = false;
+      }
+    }
+  };
+}
+
+// setup.ts
+var clockTime = external_exports.string().regex(/^(?:|(?:[01]\d|2[0-3]):[0-5]\d)$/);
+var preferencesSchema = external_exports.object({
+  notifyBlocked: external_exports.boolean(),
+  notifyFailed: external_exports.boolean(),
+  notifyFinished: external_exports.boolean(),
+  toastEnabled: external_exports.boolean(),
+  desktopEnabled: external_exports.boolean(),
+  telegramInstant: external_exports.boolean(),
+  cooldownSeconds: external_exports.number().int().min(0).max(86400),
+  quietStart: clockTime,
+  quietEnd: clockTime
+}).strict().refine((v) => Boolean(v.quietStart) === Boolean(v.quietEnd), {
+  message: "Set both quiet-hours times, or clear both.",
+  path: ["quietEnd"]
+});
+var setupStatusSchema = external_exports.object({
+  pairing: pairingSchema.nullable(),
+  completed: external_exports.boolean(),
+  version: external_exports.string(),
+  preferences: preferencesSchema,
+  desktopAvailable: external_exports.boolean(),
+  timezone: external_exports.string(),
+  telegram: telegramStatusSchema
+});
+var setupRpc = {
+  ...updateRpc,
+  setupTelegramBegin: { input: external_exports.object({ token: external_exports.string().min(1).max(256) }).strict(), output: pairingSchema },
+  setupTelegramCheck: { input: external_exports.object({ pairingId: external_exports.string().max(64) }).strict(), output: pairingSchema },
+  setupTelegramCancel: { input: external_exports.object({ pairingId: external_exports.string().max(64) }).strict(), output: external_exports.object({ ok: external_exports.boolean() }) },
+  setupTelegramConfirm: { input: external_exports.object({ pairingId: external_exports.string().max(64) }).strict(), output: setupStatusSchema },
+  setupTelegramTest: { input: external_exports.null(), output: external_exports.object({ ok: external_exports.boolean() }) },
+  setupTelegramDisconnect: { input: external_exports.null(), output: setupStatusSchema },
+  setupStatus: { input: external_exports.null(), output: setupStatusSchema },
+  setupFinish: { input: external_exports.null(), output: external_exports.object({ ok: external_exports.boolean() }) },
+  setupSave: { input: preferencesSchema, output: setupStatusSchema }
+};
+function createSetup(bb, settings) {
+  const telegram = createTelegramSetup(bb, settings);
+  async function status() {
+    const cfg = await settings.get();
+    const quietValid = clockTime.safeParse(cfg.quietStart).success && clockTime.safeParse(cfg.quietEnd).success && Boolean(cfg.quietStart) === Boolean(cfg.quietEnd);
+    return {
+      pairing: telegram.pairing(),
+      completed: await bb.storage.kv.get("setup:completed") === true,
+      version: package_default.version,
+      preferences: {
+        notifyBlocked: cfg.notifyBlocked,
+        notifyFailed: cfg.notifyFailed,
+        notifyFinished: cfg.notifyFinished,
+        toastEnabled: cfg.toastEnabled,
+        desktopEnabled: cfg.desktopEnabled,
+        telegramInstant: cfg.telegramInstant,
+        cooldownSeconds: Math.trunc(Math.max(0, Math.min(86400, Number(cfg.cooldownSeconds) || 0))),
+        quietStart: quietValid ? cfg.quietStart : "",
+        quietEnd: quietValid ? cfg.quietEnd : ""
+      },
+      desktopAvailable: desktopAvailable(),
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      telegram: await telegram.status()
+    };
+  }
+  return {
+    telegram,
+    handlers: {
+      ...createUpdates(bb, telegram.withUpdate),
+      setupTelegramBegin: ({ token }) => telegram.begin(token),
+      setupTelegramCheck: ({ pairingId }) => telegram.check(pairingId),
+      setupTelegramCancel: ({ pairingId }) => telegram.cancel(pairingId),
+      async setupTelegramConfirm({ pairingId }) {
+        await telegram.confirm(pairingId);
+        return status();
+      },
+      setupTelegramTest: () => telegram.test(),
+      async setupTelegramDisconnect() {
+        await telegram.disconnect();
+        return status();
+      },
+      setupStatus: status,
+      async setupFinish() {
+        await bb.storage.kv.set("setup:completed", true);
+        return { ok: true };
+      },
+      async setupSave(input) {
+        await bb.sdk.plugins.updateSettings({ pluginId: bb.pluginId, values: {
+          ...input,
+          cooldownSeconds: String(input.cooldownSeconds)
+        } });
+        return status();
+      }
+    }
+  };
+}
+
 // attention.ts
 var RANK = {
   error: 0,
@@ -14658,126 +15226,6 @@ async function buildSnapshot(bb, options = {}) {
   };
 }
 
-// notify.ts
-import { exec } from "node:child_process";
-import { platform } from "node:process";
-async function resolveDeeplinkBaseUrl(loopbackBaseUrl) {
-  try {
-    const response = await fetch(
-      `${loopbackBaseUrl}/api/v1/plugins/connect/rpc/status`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: "null"
-      }
-    );
-    if (!response.ok) return loopbackBaseUrl;
-    const payload = await response.json();
-    if (typeof payload !== "object" || payload === null) return loopbackBaseUrl;
-    const rpc = payload;
-    if (rpc.ok !== true) return loopbackBaseUrl;
-    const result = rpc.result;
-    if (typeof result !== "object" || result === null) return loopbackBaseUrl;
-    const { paired, url: url2 } = result;
-    if (paired === true && typeof url2 === "string" && url2.length > 0) {
-      return url2.replace(/\/+$/, "");
-    }
-  } catch {
-  }
-  return loopbackBaseUrl;
-}
-function threadUrl(baseUrl, projectId, threadId) {
-  return `${baseUrl}/projects/${encodeURIComponent(projectId)}/threads/${encodeURIComponent(threadId)}`;
-}
-function desktopAvailable() {
-  return platform === "darwin";
-}
-function osaEscape(value) {
-  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-}
-async function sendDesktop(title, message, subtitle) {
-  if (!desktopAvailable()) {
-    return { ok: false, detail: `unsupported platform: ${platform}` };
-  }
-  const parts = [
-    `display notification "${osaEscape(message)}"`,
-    `with title "${osaEscape(title)}"`
-  ];
-  if (subtitle) parts.push(`subtitle "${osaEscape(subtitle)}"`);
-  const script = parts.join(" ");
-  return new Promise((resolve) => {
-    exec(`osascript -e '${script.replace(/'/g, "'\\''")}'`, (error51) => {
-      if (error51) resolve({ ok: false, detail: error51.message });
-      else resolve({ ok: true });
-    });
-  });
-}
-async function sendTelegram(cfg, text, linkUrl) {
-  const body = linkUrl && linkUrl.startsWith("http") ? `${text}
-
-<a href="${escapeHtml(linkUrl)}">Open in bb</a>` : text;
-  try {
-    const response = await fetch(
-      `https://api.telegram.org/bot${cfg.botToken}/sendMessage`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          chat_id: cfg.chatId,
-          text: body,
-          parse_mode: "HTML",
-          disable_web_page_preview: true
-        })
-      }
-    );
-    if (response.ok) {
-      const payload = await response.json().catch(() => null);
-      return { ok: true, messageId: payload?.result?.message_id };
-    }
-    const detail = await response.text().catch(() => "");
-    return { ok: false, detail: `HTTP ${response.status}: ${detail}` };
-  } catch (error51) {
-    return {
-      ok: false,
-      detail: error51 instanceof Error ? error51.message : String(error51)
-    };
-  }
-}
-async function telegramChats(botToken) {
-  try {
-    const response = await fetch(
-      `https://api.telegram.org/bot${botToken}/getUpdates`
-    );
-    if (!response.ok) {
-      const detail = await response.text().catch(() => "");
-      return { ok: false, chats: [], detail: `HTTP ${response.status}: ${detail}` };
-    }
-    const payload = await response.json();
-    const byId = /* @__PURE__ */ new Map();
-    for (const update of payload.result ?? []) {
-      const msg = update.message ?? update.channel_post;
-      const chat = msg?.chat;
-      if (!chat) continue;
-      const name = chat.title ?? [chat.first_name, chat.last_name].filter(Boolean).join(" ") ?? chat.username ?? "(unknown)";
-      byId.set(String(chat.id), {
-        chatId: String(chat.id),
-        name,
-        lastText: msg?.text ?? ""
-      });
-    }
-    return { ok: true, chats: [...byId.values()] };
-  } catch (error51) {
-    return {
-      ok: false,
-      chats: [],
-      detail: error51 instanceof Error ? error51.message : String(error51)
-    };
-  }
-}
-function escapeHtml(value) {
-  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
 // tracker.ts
 var TRACKER_ID = "tracker";
 var zTask = external_exports.object({
@@ -14832,6 +15280,7 @@ var zItem = external_exports.object({
   updatedAt: external_exports.number()
 });
 var rpcContract = defineRpcContract({
+  ...setupRpc,
   list: {
     input: external_exports.object({
       projectId: external_exports.string().nullable().default(null),
@@ -14911,7 +15360,7 @@ async function plugin(bb) {
       type: "string",
       label: "Telegram chat id",
       default: "",
-      description: "Run `bb inbox chats` to discover it after messaging your bot."
+      description: "Connect your private chat in Needs You \u2192 Settings."
     },
     cooldownSeconds: {
       type: "string",
@@ -14929,12 +15378,7 @@ async function plugin(bb) {
       default: ""
     }
   });
-  function telegramConfig(cfg) {
-    if (cfg.telegramBotToken && cfg.telegramChatId) {
-      return { botToken: cfg.telegramBotToken, chatId: cfg.telegramChatId };
-    }
-    return null;
-  }
+  const setup = createSetup(bb, settings);
   function quietNow(cfg) {
     const start = parseHhmm(cfg.quietStart);
     const end = parseHhmm(cfg.quietEnd);
@@ -14968,7 +15412,7 @@ async function plugin(bb) {
     const rec = await bb.storage.kv.get(recKey);
     if (rec && rec.at === item.attentionAt && rec.kind === item.kind) return;
     if (item.kind === "finished") {
-      const cooldownMs = (Number(cfg.cooldownSeconds) || 45) * 1e3;
+      const cooldownMs = (Number.isFinite(Number(cfg.cooldownSeconds)) ? Math.max(0, Number(cfg.cooldownSeconds)) : 45) * 1e3;
       const last = await bb.storage.kv.get(LAST_FINISHED_KEY) ?? 0;
       if (Date.now() - last < cooldownMs) return;
     }
@@ -14989,8 +15433,10 @@ async function plugin(bb) {
     if (cfg.desktopEnabled && desktopAvailable()) {
       await sendDesktop(`bb: ${title}`, body, item.label);
     }
-    const tg = telegramConfig(cfg);
-    if (tg && cfg.telegramInstant) {
+    await setup.telegram.withConnection(async (current) => {
+      const enabled2 = item.kind === "blocked" ? current.notifyBlocked : item.kind === "error" ? current.notifyFailed : current.notifyFinished;
+      if (!current.telegramInstant || !enabled2 || quietNow(current)) return;
+      const tg = { botToken: current.telegramBotToken, chatId: current.telegramChatId };
       const url2 = await deeplink(item);
       const emoji3 = item.kind === "error" ? "\u{1F6A8}" : item.kind === "blocked" ? "\u{1F64B}" : "\u{1F514}";
       const text = `${emoji3} <b>${escapeHtml(title)}</b>
@@ -14999,7 +15445,7 @@ ${escapeHtml(body)}`;
       if (!res.ok) {
         bb.log.warn(`telegram send failed: ${res.detail}`);
       }
-    }
+    });
     await bb.storage.kv.set(recKey, {
       at: item.attentionAt,
       kind: item.kind
@@ -15093,6 +15539,7 @@ ${escapeHtml(body)}`;
     }
   });
   bb.rpc.register(rpcContract, {
+    ...setup.handlers,
     async list({ projectId, includeFinished }) {
       const dismissed = await loadDismissed();
       const snapshot = await buildSnapshot(bb, {
@@ -15107,7 +15554,7 @@ ${escapeHtml(body)}`;
       return {
         desktop: cfg.desktopEnabled && desktopAvailable(),
         toast: cfg.toastEnabled,
-        telegram: telegramConfig(cfg) !== null,
+        telegram: (await setup.telegram.status()).configured,
         notifyBlocked: cfg.notifyBlocked,
         notifyFailed: cfg.notifyFailed,
         notifyFinished: cfg.notifyFinished
@@ -15126,14 +15573,14 @@ ${escapeHtml(body)}`;
         await sendDesktop(`bb: ${truncate(title, 90)}`, truncate(body, 200), title);
         desktop = true;
       }
-      const tg = telegramConfig(cfg);
-      if ((channel === "telegram" || channel === "both") && tg) {
+      if (channel === "telegram" || channel === "both") await setup.telegram.withConnection(async (current) => {
+        const tg = { botToken: current.telegramBotToken, chatId: current.telegramChatId };
         const text = `\u{1F514} <b>${escapeHtml(truncate(title, 90))}</b>${body ? `
 ${escapeHtml(truncate(body, 300))}` : ""}`;
         const res = await sendTelegram(tg, text, url2 ?? void 0);
         if (!res.ok) bb.log.warn(`notify telegram failed: ${res.detail}`);
         else telegram = true;
-      }
+      });
       return { desktop, telegram };
     }
   });
@@ -15196,7 +15643,7 @@ ${snap.total} thread${snap.total === 1 ? "" : "s"} need you${snap.total > snap.i
             return { exitCode: 0, stdout: `Dismissed: ${item.title}` };
           }
           case "status": {
-            const tg = telegramConfig(cfg);
+            const tg = (await setup.telegram.status()).configured;
             const lines = [
               `desktop:        ${cfg.desktopEnabled && desktopAvailable() ? "on" : "off"}`,
               `in-app toast:   ${cfg.toastEnabled ? "on" : "off"}`,
@@ -15238,20 +15685,17 @@ ${snap.total} thread${snap.total === 1 ? "" : "s"} need you${snap.total > snap.i
               out.push(`desktop:  ${r.ok ? "sent" : `failed \u2014 ${r.detail}`}`);
             }
             if (wantTelegram) {
-              const tg = telegramConfig(cfg);
-              if (!tg) {
-                out.push("telegram: not configured (set telegramBotToken + telegramChatId)");
-              } else {
-                const r = await sendTelegram(
-                  tg,
-                  "\u2705 <b>bb inbox</b>\nTest notification \u2014 you're linked."
-                );
-                out.push(`telegram: ${r.ok ? "sent" : `failed \u2014 ${r.detail}`}`);
+              try {
+                await setup.telegram.test();
+                out.push("telegram: test accepted; check your phone");
+              } catch (error51) {
+                out.push(`telegram: ${error51 instanceof Error ? error51.message : "Test failed"}`);
               }
             }
             return { exitCode: 0, stdout: out.join("\n") };
           }
           case "chats": {
+            if (setup.telegram.isPairing()) return { exitCode: 1, stderr: "Telegram setup is pairing in Needs You. Finish or cancel it there before reading chats." };
             if (!cfg.telegramBotToken) {
               return { exitCode: 1, stderr: "Set telegramBotToken first, then message your bot and re-run." };
             }

@@ -8,6 +8,7 @@
 // bb-plugin-ntfy. Both MIT, by Shane Logsdon.
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
+import { createSetup, setupRpc } from "./setup";
 import {
   buildSnapshot,
   DISMISS_PREFIX,
@@ -49,6 +50,7 @@ const zItem = z.object({
 });
 
 export const rpcContract = defineRpcContract({
+  ...setupRpc,
   list: {
     input: z.object({
       projectId: z.string().nullable().default(null),
@@ -130,7 +132,7 @@ export default async function plugin(bb: BbPluginApi) {
       type: "string",
       label: "Telegram chat id",
       default: "",
-      description: "Run `bb inbox chats` to discover it after messaging your bot.",
+      description: "Connect your private chat in Needs You → Settings.",
     },
     cooldownSeconds: {
       type: "string",
@@ -149,17 +151,9 @@ export default async function plugin(bb: BbPluginApi) {
     },
   });
 
-  // ----- config helpers -------------------------------------------------
+  const setup = createSetup(bb, settings);
 
-  function telegramConfig(cfg: {
-    telegramBotToken: string | undefined;
-    telegramChatId: string;
-  }): TelegramConfig | null {
-    if (cfg.telegramBotToken && cfg.telegramChatId) {
-      return { botToken: cfg.telegramBotToken, chatId: cfg.telegramChatId };
-    }
-    return null;
-  }
+  // ----- config helpers -------------------------------------------------
 
   function quietNow(cfg: { quietStart: string; quietEnd: string }): boolean {
     const start = parseHhmm(cfg.quietStart);
@@ -211,7 +205,7 @@ export default async function plugin(bb: BbPluginApi) {
     if (rec && rec.at === item.attentionAt && rec.kind === item.kind) return;
 
     if (item.kind === "finished") {
-      const cooldownMs = (Number(cfg.cooldownSeconds) || 45) * 1000;
+      const cooldownMs = (Number.isFinite(Number(cfg.cooldownSeconds)) ? Math.max(0, Number(cfg.cooldownSeconds)) : 45) * 1000;
       const last = (await bb.storage.kv.get<number>(LAST_FINISHED_KEY)) ?? 0;
       if (Date.now() - last < cooldownMs) return;
     }
@@ -241,8 +235,10 @@ export default async function plugin(bb: BbPluginApi) {
       await sendDesktop(`bb: ${title}`, body, item.label);
     }
 
-    const tg = telegramConfig(cfg);
-    if (tg && cfg.telegramInstant) {
+    await setup.telegram.withConnection(async current => {
+      const enabled = item.kind === "blocked" ? current.notifyBlocked : item.kind === "error" ? current.notifyFailed : current.notifyFinished;
+      if (!current.telegramInstant || !enabled || quietNow(current)) return;
+      const tg = { botToken: current.telegramBotToken, chatId: current.telegramChatId };
       const url = await deeplink(item);
       const emoji =
         item.kind === "error" ? "🚨" : item.kind === "blocked" ? "🙋" : "🔔";
@@ -251,7 +247,7 @@ export default async function plugin(bb: BbPluginApi) {
       if (!res.ok) {
         bb.log.warn(`telegram send failed: ${res.detail}`);
       }
-    }
+    });
 
     await bb.storage.kv.set(recKey, {
       at: item.attentionAt,
@@ -362,6 +358,7 @@ export default async function plugin(bb: BbPluginApi) {
   // ----- RPC ------------------------------------------------------------
 
   bb.rpc.register(rpcContract, {
+    ...setup.handlers,
     async list({ projectId, includeFinished }) {
       const dismissed = await loadDismissed();
       const snapshot = await buildSnapshot(bb, {
@@ -376,7 +373,7 @@ export default async function plugin(bb: BbPluginApi) {
       return {
         desktop: cfg.desktopEnabled && desktopAvailable(),
         toast: cfg.toastEnabled,
-        telegram: telegramConfig(cfg) !== null,
+        telegram: (await setup.telegram.status()).configured,
         notifyBlocked: cfg.notifyBlocked,
         notifyFailed: cfg.notifyFailed,
         notifyFinished: cfg.notifyFinished,
@@ -399,15 +396,15 @@ export default async function plugin(bb: BbPluginApi) {
         await sendDesktop(`bb: ${truncate(title, 90)}`, truncate(body, 200), title);
         desktop = true;
       }
-      const tg = telegramConfig(cfg);
-      if ((channel === "telegram" || channel === "both") && tg) {
+      if (channel === "telegram" || channel === "both") await setup.telegram.withConnection(async current => {
+        const tg = { botToken: current.telegramBotToken, chatId: current.telegramChatId };
         const text = `🔔 <b>${escapeHtml(truncate(title, 90))}</b>${
           body ? `\n${escapeHtml(truncate(body, 300))}` : ""
         }`;
         const res = await sendTelegram(tg, text, url ?? undefined);
         if (!res.ok) bb.log.warn(`notify telegram failed: ${res.detail}`);
         else telegram = true;
-      }
+      });
       return { desktop, telegram };
     },
   });
@@ -475,7 +472,7 @@ export default async function plugin(bb: BbPluginApi) {
           }
 
           case "status": {
-            const tg = telegramConfig(cfg);
+            const tg = (await setup.telegram.status()).configured;
             const lines = [
               `desktop:        ${cfg.desktopEnabled && desktopAvailable() ? "on" : "off"}`,
               `in-app toast:   ${cfg.toastEnabled ? "on" : "off"}`,
@@ -519,21 +516,14 @@ export default async function plugin(bb: BbPluginApi) {
               out.push(`desktop:  ${r.ok ? "sent" : `failed — ${r.detail}`}`);
             }
             if (wantTelegram) {
-              const tg = telegramConfig(cfg);
-              if (!tg) {
-                out.push("telegram: not configured (set telegramBotToken + telegramChatId)");
-              } else {
-                const r = await sendTelegram(
-                  tg,
-                  "✅ <b>bb inbox</b>\nTest notification — you're linked.",
-                );
-                out.push(`telegram: ${r.ok ? "sent" : `failed — ${r.detail}`}`);
-              }
+              try { await setup.telegram.test(); out.push("telegram: test accepted; check your phone"); }
+              catch (error) { out.push(`telegram: ${error instanceof Error ? error.message : "Test failed"}`); }
             }
             return { exitCode: 0, stdout: out.join("\n") };
           }
 
           case "chats": {
+            if (setup.telegram.isPairing()) return { exitCode: 1, stderr: "Telegram setup is pairing in Needs You. Finish or cancel it there before reading chats." };
             if (!cfg.telegramBotToken) {
               return { exitCode: 1, stderr: "Set telegramBotToken first, then message your bot and re-run." };
             }

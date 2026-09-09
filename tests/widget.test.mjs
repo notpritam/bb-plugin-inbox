@@ -177,10 +177,16 @@ const inboxItems = [
   { ...event('waiting'), title: 'Design marketplace', detail: 'Grid or list?' },
   { ...event('finished'), kind: 'finished', title: 'Update docs', label: 'Turn finished — reply needed', detail: undefined },
 ].map(item => JSON.parse(JSON.stringify(item)));
+const setupState = {
+  pairing: null, completed: true, version: '0.2.0-beta.2', desktopAvailable: false, timezone: 'UTC',
+  preferences: { notifyBlocked:true, notifyFailed:true, notifyFinished:false, toastEnabled:true, desktopEnabled:false, telegramInstant:true, cooldownSeconds:45, quietStart:'', quietEnd:'' },
+  telegram: { configured:false, chatId:null, name:null, botUsername:null, lastTest:null },
+};
+const currentUpdate = { outcome:'current', installedVersion:'0.2.0-beta.2', latestVersion:null, candidateVersion:null, detail:'Current', checkedAt:1 };
 function mountPanel(rpc = {}) {
   mounted = renderSlot(app.navPanels[0], { subPath: '' }, {
     context: { projectId: 'p1', threadId: null },
-    rpc: { list: () => ({ items: inboxItems, total: 3, generatedAt: 0 }), ...rpc },
+    rpc: { list: () => ({ items: inboxItems, total: 3, generatedAt: 0 }), setupStatus: () => structuredClone(setupState), setupCheckUpdates: () => currentUpdate, ...rpc },
   });
   return mounted;
 }
@@ -242,4 +248,48 @@ test('Calm toast exposes the reason, thread and context while retaining the nati
   assert.ok(within(popup).getByText('Waiting: other'));
   assert.ok(within(popup).getByText('Which option?'));
   assert.ok(within(popup).getByRole('button', { name: 'Open thread' }));
+});
+
+
+test('first use offers Telegram setup without blocking threads and the welcome can be skipped', async () => {
+  let completed=false;
+  mountPanel({setupStatus:()=>({...setupState,completed}),setupFinish:()=>{completed=true;return {ok:true}}});
+  await screen.findByRole('heading',{name:'Welcome to Needs You'});
+  assert.ok(screen.getByRole('button',{name:'Open Fix checkout'}));
+  fireEvent.click(screen.getByRole('button',{name:'Use inbox',exact:true}));
+  await waitFor(()=>assert.equal(screen.queryByRole('heading',{name:'Welcome to Needs You'}) === null,true));
+  fireEvent.click(screen.getByRole('button',{name:'Settings',exact:true}));
+  await screen.findByLabelText('Telegram bot token');
+  assert.ok(screen.getByRole('button',{name:'Back to inbox'}));
+});
+
+test('Telegram setup masks and clears the token, then requires chat confirmation and an explicit test', async () => {
+  const pairing={id:'pair-one',botUsername:'fixture_bot',url:'https://t.me/fixture_bot?start=synthetic',expiresAt:Date.now()+600000,candidate:null};
+  const connected={...setupState,telegram:{configured:true,chatId:'123',name:'Casey',botUsername:'fixture_bot',lastTest:null}};
+  mountPanel({setupTelegramBegin:()=>pairing,setupTelegramCheck:()=>({...pairing,candidate:{chatId:'123',name:'Casey',username:'casey'}}),setupTelegramConfirm:()=>connected,setupTelegramTest:()=>({ok:true})});
+  fireEvent.click(await screen.findByRole('button',{name:'Settings',exact:true}));
+  const input=await screen.findByLabelText('Telegram bot token');assert.equal(input.type,'password');
+  fireEvent.change(input,{target:{value:'synthetic-private-token'}});
+  fireEvent.click(screen.getByRole('button',{name:'Connect bot',exact:true}));
+  await screen.findByRole('link',{name:'Open bot in Telegram'});
+  assert.equal(screen.queryByDisplayValue('synthetic-private-token'),null);
+  fireEvent.click(screen.getByRole('button',{name:'I pressed Start',exact:true}));
+  await screen.findByText('@casey');
+  fireEvent.click(screen.getByRole('button',{name:'Confirm this chat',exact:true}));
+  await screen.findByRole('button',{name:'Send test notification',exact:true});
+  assert.equal(mounted.inspection.rpcCalls.filter(c=>c.method==='setupTelegramTest').length,0);
+  fireEvent.click(screen.getByRole('button',{name:'Send test notification',exact:true}));
+  await screen.findByText(/Telegram accepted the test/);
+});
+
+test('notification settings save from the plugin and expose an opt-in update action', async () => {
+  let saved;
+  mountPanel({setupSave:input=>{saved=input;return {...setupState,preferences:input}},setupCheckUpdates:()=>({...currentUpdate,outcome:'update-available',latestVersion:'v0.2.0-beta.3',candidateVersion:'new'})});
+  await screen.findByText(/Update available/);
+  fireEvent.click(screen.getByRole('button',{name:'Settings',exact:true}));
+  fireEvent.click(await screen.findByRole('checkbox',{name:/Completed turns/}));
+  fireEvent.click(screen.getByRole('button',{name:'Save notification settings',exact:true}));
+  await waitFor(()=>assert.equal(saved.notifyFinished,true));
+  assert.ok(screen.getByRole('button',{name:'Update now',exact:true}));
+  assert.equal(mounted.inspection.rpcCalls.some(c=>c.method==='setupApplyUpdate'),false);
 });

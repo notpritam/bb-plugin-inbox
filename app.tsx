@@ -17,6 +17,7 @@ import type { rpcContract } from "./server";
 import { Icon, type IconName } from "@/components/ui/icon";
 import { INBOX_STYLES } from "./styles";
 import { NeedsYouMark } from "./components/needs-you-mark";
+import { SettingsView, useSetup, WelcomeSetup } from "./settings-view";
 
 type Kind = "error" | "blocked" | "finished";
 
@@ -246,6 +247,8 @@ function EmptyInbox() {
 }
 
 function InboxPanel() {
+  const setup = useSetup();
+  const [view, setView] = useState<"inbox" | "settings">("inbox");
   const inbox = useInbox(true);
   const items = inbox.data?.items ?? [];
   const failed = items.filter(item => item.kind === "error");
@@ -268,8 +271,19 @@ function InboxPanel() {
                 : "No waiting or failed threads."}
             </p>
           </div>
-          <span className="ny-header-icon"><NeedsYouMark /></span>
+          <nav className="ny-view-nav" aria-label="Needs You views">
+            <button type="button" aria-pressed={view === "inbox"} onClick={() => setView("inbox")}>Inbox</button>
+            <button type="button" aria-pressed={view === "settings"} onClick={() => setView("settings")}>Settings</button>
+          </nav>
         </header>
+        {setup.update?.outcome === "update-available" && view === "inbox" && <div className="ny-update-notice" role="status">
+          <span>Update available: {setup.update.latestVersion}</span><button onClick={() => setView("settings")}>View update</button>
+        </div>}
+        {setup.error && <p className="ny-setup-error" role="status">{setup.error} <button onClick={() => void setup.load()}>Retry setup</button></p>}
+        {view === "settings" && !setup.state && <p role="status">{setup.error || "Loading settings…"}</p>}
+        {setup.state && <div hidden={view !== "settings"}><SettingsView model={setup} back={() => setView("inbox")} /></div>}
+        <div hidden={view !== "inbox"}>
+        <WelcomeSetup model={setup} openSettings={() => setView("settings")} />
         {inbox.error && <InboxError hasData={!!inbox.data} loading={inbox.loading} retry={() => void inbox.reload()} />}
         {initialLoading ? <div className="ny-loading" role="status">
           <span className="ny-sr-only">Loading inbox</span>
@@ -283,6 +297,7 @@ function InboxPanel() {
             <p className="ny-finished-note">Finished work stays here until you dismiss it.</p>
           </div>}
         </> : null}
+        </div>
       </div>
     </div>
   );
