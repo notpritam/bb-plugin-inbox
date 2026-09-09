@@ -35,11 +35,12 @@ is not included in this beta; configuration is manual.
 1. Open [@BotFather](https://t.me/BotFather) in Telegram and use `/newbot`.
    Choose a bot name and username; BotFather gives you its token.
 2. In BB, open **Settings → Plugins → Needs You** and enter the token in
-   **Telegram bot token**. Keep it private; do not post it in a chat or issue.
+   **Telegram bot token**, then click **Save settings**. Keep the token private;
+   do not post it in a chat or issue.
 3. Open your new bot in Telegram and press **Start** (or send it a message).
 4. Run `bb inbox chats` on the BB machine. Find your private chat and enter
-   its ID in **Telegram chat id** in the same settings. Use a dedicated bot
-   that is not connected to another application.
+   its ID in **Telegram chat id** in the same settings, then click **Save settings**.
+   Use a dedicated bot that is not connected to another application.
 5. Keep Telegram notifications enabled and run:
 
    ```sh
