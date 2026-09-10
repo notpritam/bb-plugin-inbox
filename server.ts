@@ -132,7 +132,7 @@ export default async function plugin(bb: BbPluginApi) {
       label: "Telegram bot token",
       secret: true,
       description:
-        "From @BotFather. Set with `bb plugin config inbox set telegramBotToken <token>`.",
+        "Connect your own bot in Needs You → Settings → Telegram.",
     },
     telegramChatId: {
       type: "string",
@@ -385,7 +385,7 @@ export default async function plugin(bb: BbPluginApi) {
     },
   });
 
-  // Telegram is notification-only in this beta. Remote actions are not registered.
+  // Telegram is notification-only. Remote actions are not registered.
 
   // ----- RPC ------------------------------------------------------------
 
@@ -421,6 +421,7 @@ export default async function plugin(bb: BbPluginApi) {
       const cfg = await settings.get();
       let desktop = false;
       let telegram = false;
+      if (!cfg.notifyExtensions || quietNow(cfg)) return { desktop, telegram };
       if (
         (channel === "desktop" || channel === "both") &&
         cfg.desktopEnabled &&
@@ -430,6 +431,7 @@ export default async function plugin(bb: BbPluginApi) {
         desktop = true;
       }
       if (channel === "telegram" || channel === "both") await setup.telegram.withConnection(async current => {
+        if (!current.notifyExtensions || !current.telegramInstant || quietNow(current)) return;
         const tg = { botToken: current.telegramBotToken, chatId: current.telegramChatId };
         const text = `🔔 <b>${escapeHtml(truncate(title, 90))}</b>${
           body ? `\n${escapeHtml(truncate(body, 300))}` : ""
@@ -556,7 +558,7 @@ export default async function plugin(bb: BbPluginApi) {
           case "chats": {
             if (setup.telegram.isPairing()) return { exitCode: 1, stderr: "Telegram setup is pairing in Needs You. Finish or cancel it there before reading chats." };
             if (!cfg.telegramBotToken) {
-              return { exitCode: 1, stderr: "Set telegramBotToken first, then message your bot and re-run." };
+              return { exitCode: 1, stderr: "Open Needs You → Settings → Telegram to connect your own bot and private chat." };
             }
             const r = await telegramChats(cfg.telegramBotToken);
             if (!r.ok) return { exitCode: 1, stderr: `getUpdates failed — ${r.detail}` };
@@ -651,9 +653,7 @@ const HELP = `bb inbox — threads that need you
   bb inbox test [--desktop|--telegram|--toast]  send a test notification
   bb inbox chats            list Telegram chat ids (after messaging your bot)
 
-Setup Telegram (mobile):
-  1. @BotFather → /newbot → copy the token
-  2. bb plugin config inbox set telegramBotToken <token>
-  3. Message your bot once, then: bb inbox chats
-  4. bb plugin config inbox set telegramChatId <id>
-  5. bb inbox test`;
+Setup Telegram (optional):
+  Open Needs You → Settings → Telegram.
+  Connect your own bot, press Start in Telegram, confirm your private chat,
+  then choose Send test notification. The inbox works without Telegram.`;

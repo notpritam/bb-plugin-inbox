@@ -27,7 +27,7 @@ export function createUpdates(bb: BbPluginApi, withUpdate: <T>(run: () => Promis
           "update-available": "A compatible release is ready. Your preferences and Telegram connection stay in BB when you update.",
           current: "You’re on the latest compatible release.",
           incompatible: "A newer release requires a newer BB or Node version. Update your BB host, then check again.",
-          pinned: "This installation is pinned or local. Install from the notpritam marketplace to follow compatible releases.",
+          pinned: "This installation is pinned or local. A marketplace or Git version-range installation can follow compatible releases.",
           unavailable: "Couldn’t resolve updates for this installation. Try checking again.",
         }[entry.outcome];
         cache = { outcome: entry.outcome, installedVersion: packageInfo.version,

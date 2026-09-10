@@ -1,10 +1,10 @@
 # Needs You for BB
 
-One inbox for questions, failed runs, and finished threads. Open the right
+One inbox for questions, failed runs, finished threads, and extension activity. Open the right
 conversation, keep finished work until you dismiss it, and receive one popup
 per thread. Popups stay quiet while you are reading that thread.
 
-**Public beta · 0.2.0-beta.3.** Requires BB 0.41+ and Node 24+ on its host.
+**Version 0.2.0.** Requires BB 0.41+ and Node 24+ on its host.
 The inbox needs no separate account, token, or other plugin.
 
 ## Install
@@ -21,6 +21,8 @@ Open **Extensions**, search **Needs You**, and choose **Install**. Or run:
 bb plugin install inbox@notpritam
 ```
 
+You can use this marketplace now. The BB Community listing is submitted separately and appears after maintainer approval.
+
 Review BB's installation prompt, then open **Needs You** in the sidebar.
 The release includes its built files; you do not need npm to install it.
 
@@ -31,7 +33,7 @@ turns** and save if you want completion alerts; questions and failures are on
 by default.
 
 The internal plugin ID is `inbox`. Closing a popup leaves the inbox entry in
-place; dismissing an inbox entry hides it until that thread has a new update.
+place; dismissing an inbox entry hides it until that thread or activity has a new update.
 
 ## Extension activity
 
@@ -64,10 +66,9 @@ a test is sent only when you request it. Partial connection saves pause Telegram
 alerts until you reconnect successfully.
 
 Enable BB Connect for links that open from a phone. A localhost link only works
-on its host. Telegram replies, remote approvals, and task commands are unavailable
-in this beta; respond to requests inside BB.
+on its host. Telegram replies, remote approvals, and task commands are unavailable; respond to requests inside BB.
 
-## Beta limits
+## Scope and privacy
 
 - The inbox works at desktop and compact widths. Bottom popups currently mount
   with BB's desktop sidebar accessory; use the inbox itself on compact clients.
@@ -82,7 +83,7 @@ in this beta; respond to requests inside BB.
 
 ## Update or remove
 
-The marketplace tracks compatible release tags in `^0.2.0-beta.1`. Run
+The marketplace tracks compatible release tags in `^0.2.0`. Run
 `bb marketplace refresh notpritam` to discover new listings; refresh does not
 install or update code. Needs You checks for updates when opened (cached for
 15 minutes). **Settings → Version & updates → Check for updates** forces a
@@ -92,10 +93,10 @@ first. Pinned/local installs and incompatible or unavailable releases show
 specific guidance. Checks never auto-install; **Release notes** opens GitHub.
 You can also run `bb plugin update inbox`.
 
-For a direct install pinned to this exact beta:
+For a direct install that follows compatible 0.2.x releases:
 
 ```sh
-bb plugin install git:https://github.com/notpritam/bb-plugin-inbox.git@v0.2.0-beta.3
+bb plugin install 'git:https://github.com/notpritam/bb-plugin-inbox.git@^0.2.0'
 ```
 
 Published tags will not be moved. To remove Needs You:
@@ -114,6 +115,8 @@ npm run typecheck
 npm test
 npm run build
 ```
+
+Run `NY_TEST_BB_URL=http://127.0.0.1:4343 npm run test:browser` only against a fresh, isolated BB profile with this plugin installed. It checks onboarding, settings, and demo activity without real Telegram credentials; it changes test-profile preferences and captures screenshots.
 
 Commit matching `dist/` files for Git installation. See [CHANGELOG.md](CHANGELOG.md)
 for release changes. [Report a problem](https://github.com/notpritam/bb-plugin-inbox/issues)

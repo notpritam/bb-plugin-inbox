@@ -196,7 +196,7 @@ test('Calm inbox groups active threads and keeps finished items available withou
   mountPanel();
   await screen.findByRole('heading', { name: 'Failed', exact: true });
   assert.ok(screen.getByRole('heading', { name: 'Waiting for you', exact: true }));
-  assert.ok(screen.getByText('2 threads'));
+  assert.ok(screen.getByText('2 items'));
   assert.ok(screen.getByText('Grid or list?'));
   assert.ok(screen.getByRole('heading', { name: 'Finished', exact: true }));
   assert.ok(screen.getByRole('button', { name: 'Open Update docs' }));

@@ -41,7 +41,7 @@ export function WelcomeSetup({ model, openSettings }: { model: Model; openSettin
   return <section className="ny-welcome" aria-labelledby="ny-welcome-title">
     <div><h3 id="ny-welcome-title">Welcome to Needs You</h3>
       <p>Your inbox is ready. Get questions and failed runs here, and optionally connect Telegram for alerts on your phone.</p>
-      <p>Closing a popup keeps the thread in your inbox. You can change notifications any time in Settings.</p></div>
+      <p>Finished work stays until you dismiss it. Turn on completion alerts or change other notifications in Settings.</p></div>
     <div className="ny-settings-actions"><button className="ny-primary" onClick={openSettings}>Set up Telegram</button>
       <button className="ny-secondary" onClick={() => void skip()} disabled={busy}>{busy ? "Saving…" : "Use inbox"}</button></div>
     {error && <p role="alert">{error}</p>}
@@ -115,7 +115,7 @@ export function SettingsView({ model, back }: { model: Model; back: () => void }
       </section>
       <section aria-labelledby="ny-telegram-title">
         <h4 id="ny-telegram-title">Telegram</h4>
-        <p>Use your own bot for phone alerts. Notifications share thread titles and request context with Telegram. Phone replies and approvals stay in BB.</p>
+        <p>Use your own bot for phone alerts. Notifications share titles and request context with Telegram. Reply to questions and approve requests inside BB.</p>
         {state.telegram.configured && <div className="ny-connection">
           <strong>{state.telegram.botUsername ? `@${state.telegram.botUsername}` : "Telegram configured"}</strong>
           <p>{state.telegram.name ?? "Private chat"} · {state.telegram.chatId}</p>

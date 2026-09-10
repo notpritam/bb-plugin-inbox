@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0 — 2026-09-10
+
+- Public release with optional Telegram onboarding, Settings, explicit updates, and durable Guided Review/extension activity.
+- Fix the legacy notification API bypassing quiet hours, the Telegram alert preference, and the extension activity preference. Add regression tests with mocked delivery.
+- Clarify onboarding and inbox counts for both threads and extension work.
+- Route setup guidance through the in-plugin Telegram flow and remove outdated beta instructions.
+- Retain the approved calm layout, one popup per thread or activity, active-item suppression, and visible finished work until dismissal.
+
 ## 0.2.0-beta.3 — 2026-09-09
 
 - Durable extension activity API, with one inbox item per review or job and deduplication across retries, dismissal, and reloads.
@@ -27,5 +35,5 @@
   Telegram task commands are withheld while their request binding is hardened.
 - Added installation, configuration, privacy and platform-limit documentation.
 
-This is an early release. Guided pairing and compact-client popup delivery
-remain planned; the working inbox is available on compact clients.
+At the time of beta.1, guided pairing was still planned; it shipped in beta.2.
+Bottom popups still require the desktop sidebar; the inbox works on compact clients.

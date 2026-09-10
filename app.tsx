@@ -251,7 +251,7 @@ function EmptyInbox() {
   return <div className="ny-empty">
     <span className="ny-empty-icon"><Icon name="CircleCheck" aria-hidden /></span>
     <h3>Nothing needs you right now.</h3>
-    <p>Questions, failed runs, and completed extension work will appear here.</p>
+    <p>Questions, failed runs, and finished work will appear here.</p>
   </div>;
 }
 
@@ -276,8 +276,8 @@ function InboxPanel({ subPath = "" }: { subPath?: string }) {
             <h2>Needs You</h2>
             <p className="ny-summary" role="status">
               {initialLoading ? "Checking your threads…" : !inbox.data && inbox.error ? "Unable to check your threads" : active > 0
-                ? <><strong>{active} thread{active === 1 ? "" : "s"}</strong> need{active === 1 ? "s" : ""} your attention</>
-                : "No waiting or failed threads."}
+                ? <><strong>{active} item{active === 1 ? "" : "s"}</strong> need{active === 1 ? "s" : ""} your attention</>
+                : "No waiting or failed work."}
             </p>
           </div>
           <nav className="ny-view-nav" aria-label="Needs You views">

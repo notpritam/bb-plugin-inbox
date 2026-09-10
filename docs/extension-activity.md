@@ -84,3 +84,5 @@ them; normal BB update handling applies.
 Guided Review retries an unacknowledged event once a minute for up to 24 hours
 while loaded. It discards outcomes superseded by a newer generation and never
 turns a successful guide into an error because notification delivery failed.
+
+The legacy `notify` RPC sends a transient desktop/Telegram alert without an inbox receipt or deduplication. It also respects Extension activity, quiet hours, and the Telegram alerts preference. Prefer `publishActivity` for completed work and retries. Explicit user-requested test notifications remain available through Settings.

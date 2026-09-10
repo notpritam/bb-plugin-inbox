@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-inbox",
-  "version": "0.2.0-beta.3",
+  "version": "0.2.0",
   "type": "module",
   "engines": {
     "node": ">=24",
@@ -9,7 +9,7 @@
   },
   "bb": {
     "name": "Needs You",
-    "description": "One inbox for BB threads that need attention, with optional Telegram notifications.",
+    "description": "Questions, failed runs, finished threads, and extension activity in one inbox, with optional Telegram alerts.",
     "branding": {
       "icon": "./assets/icon.svg"
     },
@@ -47,6 +47,7 @@
     "esbuild": "0.28.1",
     "hono": "^4.11.9",
     "jsdom": "29.0.1",
+    "playwright": "1.62.1",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "sonner": "^1.7.4",
@@ -54,7 +55,7 @@
     "typescript": "^5.7.0",
     "vaul": "^1.1.2"
   },
-  "description": "One inbox for BB threads that need attention, with optional Telegram notifications.",
+  "description": "Questions, failed runs, finished threads, and extension activity in one inbox, with optional Telegram alerts.",
   "author": "Pritam Sharma",
   "homepage": "https://notpritam.in/plugins/needs-you",
   "repository": {
@@ -64,7 +65,8 @@
   "scripts": {
     "build": "bb plugin build",
     "typecheck": "tsc --noEmit",
-    "test": "node --import ./tests/register.mjs --test tests/*.test.mjs"
+    "test": "node --import ./tests/register.mjs --test tests/*.test.mjs",
+    "test:browser": "node scripts/browser-smoke.mjs"
   },
   "license": "MIT"
 }
