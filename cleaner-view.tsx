@@ -151,7 +151,7 @@ export function CleanerView() {
               <span className="ny-item-reason">{item.projectName} · {archived ? item.reason === "done" ? "Done" : item.reason === "unneeded" ? "No longer needed" : "Archived" : item.blocked ?? (item.status === "error" ? "Failed" : "Idle")}</span>
             </span>
           </button>
-          <time className="ny-time" dateTime={new Date(item.updatedAt).toISOString()} title="Last activity">{new Date(item.updatedAt).toLocaleDateString()}</time>
+          <time className="ny-time" dateTime={new Date(item.updatedAt).toISOString()} title="Last activity">{new Date(item.updatedAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</time>
         </li>)}
       </ul>
       <div className="ny-cleaner-pagination"><span>{data.total ? offset + 1 : 0}–{offset + data.items.length} of {data.total} threads</span>
