@@ -22,6 +22,7 @@ import { SettingsView, useSetup, WelcomeSetup } from "./settings-view";
 import { isActivityHref, viewingActivity } from "./destinations";
 
 import { CleanerView, ArchiveThreadButton } from "./cleaner-view";
+import { markThreadDoneAction, ThreadDoneOverlay } from "./thread-cleaner-action";
 
 type Kind = "error" | "blocked" | "finished";
 
@@ -512,6 +513,8 @@ function InboxAccessory() {
 }
 
 export default definePluginApp((app) => {
+  app.slots.experimental_threadAction(markThreadDoneAction);
+  app.slots.experimental_appOverlay({ id: "mark-done", component: ThreadDoneOverlay });
   app.slots.navPanel({
     id: "inbox",
     title: "Needs You",

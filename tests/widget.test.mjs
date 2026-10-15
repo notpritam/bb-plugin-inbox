@@ -397,3 +397,35 @@ test('archived cleaner shows completion reason and restores selected conversatio
   await screen.findByText('No threads match.');
   assert.equal(restored, true);
 });
+
+test('sidebar done action targets the selected thread and requires confirmation without navigating', async () => {
+  const registration = app.threadActions.find(action => action.id === 'mark-done');
+  const Overlay = app.appOverlays.find(overlay => overlay.id === 'mark-done').component;
+  const target = { id: 'selected-thread', projectId: 'p1', parentThreadId: null, archivedAt: null, pinnedAt: null, sectionId: null, isUnread: false, status: 'idle', environment: null };
+  function Shell() {
+    const data = registration.useData({ threadIds: [target.id] });
+    const item = registration.item({ thread: target, data });
+    return React.createElement(React.Fragment, null,
+      React.createElement('button', { disabled: item.disabled, onClick: () => item.run({ requestRename() {} }) }, item.label),
+      React.createElement(Overlay));
+  }
+  mounted = renderSlot({ component: Shell }, {}, {
+    context: { projectId: 'p1', threadId: 'different-open-thread' },
+    rpc: {
+      cleanerPreview: input => {
+        assert.deepEqual(input, { threadIds: ['selected-thread'], reason: 'done' });
+        return { token: 'sidebar-preview', reason: 'done', items: [{ id: target.id, title: 'Selected sidebar thread', projectId: 'p1', projectName: 'Personal', updatedAt: 100, archivedAt: null, status: 'idle', blocked: null, reason: null }] };
+      },
+      cleanerArchive: input => { assert.deepEqual(input, { token: 'sidebar-preview' }); return { archivedIds: [target.id], errors: [] }; },
+    },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Mark done & archive', exact: true }));
+  await screen.findByText('Selected sidebar thread');
+  assert.equal(mounted.inspection.rpcCalls.some(call => call.method === 'cleanerArchive'), false);
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm archive' }));
+  await waitFor(() => assert.equal(screen.queryByRole('dialog') === null, true));
+  assert.equal(mounted.inspection.rpcCalls.filter(call => call.method === 'cleanerArchive').length, 1);
+  assert.deepEqual(mounted.inspection.navigateCalls, []);
+  assert.equal(registration.item({ thread: { ...target, archivedAt: 1 }, data: { busy: false } }), null);
+  assert.equal(registration.item({ thread: { ...target, status: 'active' }, data: { busy: false } }).disabled, true);
+});

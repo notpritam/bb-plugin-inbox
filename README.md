@@ -127,6 +127,8 @@ and BB Connect links draw on `bb-plugin-ntfy`, both by Shane Logsdon (MIT).
 
 ## Thread cleaner
 
+Use a thread's sidebar **⋯ → Mark done & archive** to finish it without opening Needs You. The confirmation previews all affected child threads. Running and pinned threads are protected.
+
 Open **Needs You → Thread cleaner** to review all visible threads, including read and dismissed conversations. Search by title, filter by project or inactivity (7, 30, or 90 days), and select up to 100 threads per page. Oldest activity appears first.
 
 - **Done & archive** records that the thread's work is done and archives it.
