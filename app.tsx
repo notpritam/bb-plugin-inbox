@@ -21,6 +21,9 @@ import { SettingsView, useSetup, WelcomeSetup } from "./settings-view";
 
 import { isActivityHref, viewingActivity } from "./destinations";
 
+import { CleanerView, ArchiveThreadButton } from "./cleaner-view";
+import { markThreadDoneAction, ThreadDoneOverlay } from "./thread-cleaner-action";
+
 type Kind = "error" | "blocked" | "finished";
 
 interface Item {
@@ -198,6 +201,7 @@ function ItemRow({ item, onOpen, onDismiss, dismissing }: {
         </span>
       </button>
       <span className="ny-row-end">
+        {item.threadId && item.kind === "finished" && <ArchiveThreadButton threadId={item.threadId} title={item.title} />}
         <time className="ny-time" dateTime={new Date(item.attentionAt).toISOString()} title={new Date(item.attentionAt).toLocaleString()}>
           {relativeTime(item.attentionAt)}
         </time>
@@ -257,7 +261,13 @@ function EmptyInbox() {
 
 function InboxPanel({ subPath = "" }: { subPath?: string }) {
   const setup = useSetup();
-  const [view, setView] = useState<"inbox" | "settings">(subPath === "settings" ? "settings" : "inbox");
+  const nav = useBbNavigate();
+  const [view, setCurrentView] = useState<"inbox" | "cleaner" | "settings">(subPath === "settings" ? "settings" : subPath === "cleaner" ? "cleaner" : "inbox");
+  useEffect(() => setCurrentView(subPath === "settings" ? "settings" : subPath === "cleaner" ? "cleaner" : "inbox"), [subPath]);
+  const setView = (next: "inbox" | "cleaner" | "settings") => {
+    setCurrentView(next);
+    nav.toPluginPanel("inbox", { subPath: next === "inbox" ? "" : next });
+  };
   const inbox = useInbox(true);
   const items = inbox.data?.items ?? [];
   const failed = items.filter(item => item.kind === "error");
@@ -282,6 +292,7 @@ function InboxPanel({ subPath = "" }: { subPath?: string }) {
           </div>
           <nav className="ny-view-nav" aria-label="Needs You views">
             <button type="button" aria-pressed={view === "inbox"} onClick={() => setView("inbox")}>Inbox</button>
+            <button type="button" aria-pressed={view === "cleaner"} onClick={() => setView("cleaner")}>Thread cleaner</button>
             <button type="button" aria-pressed={view === "settings"} onClick={() => setView("settings")}>Settings</button>
           </nav>
         </header>
@@ -291,6 +302,7 @@ function InboxPanel({ subPath = "" }: { subPath?: string }) {
         {setup.error && <p className="ny-setup-error" role="status">{setup.error} <button onClick={() => void setup.load()}>Retry setup</button></p>}
         {view === "settings" && !setup.state && <p role="status">{setup.error || "Loading settings…"}</p>}
         {setup.state && <div hidden={view !== "settings"}><SettingsView model={setup} back={() => setView("inbox")} /></div>}
+        {view === "cleaner" && <CleanerView />}
         <div hidden={view !== "inbox"}>
         <WelcomeSetup model={setup} openSettings={() => setView("settings")} />
         {inbox.error && <InboxError hasData={!!inbox.data} loading={inbox.loading} retry={() => void inbox.reload()} />}
@@ -303,7 +315,7 @@ function InboxPanel({ subPath = "" }: { subPath?: string }) {
           <ItemGroup title="Waiting for you" items={waiting} {...actions} />
           {finished.length > 0 && <div className="ny-finished">
             <ItemGroup title="Finished" items={finished} {...actions} />
-            <p className="ny-finished-note">Finished work stays here until you dismiss it.</p>
+            <p className="ny-finished-note">Mark finished threads done to archive them, or dismiss to keep them in your sidebar.</p>
           </div>}
         </> : null}
         </div>
@@ -501,6 +513,8 @@ function InboxAccessory() {
 }
 
 export default definePluginApp((app) => {
+  app.slots.experimental_threadAction(markThreadDoneAction);
+  app.slots.experimental_appOverlay({ id: "mark-done", component: ThreadDoneOverlay });
   app.slots.navPanel({
     id: "inbox",
     title: "Needs You",

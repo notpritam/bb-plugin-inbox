@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.1
+
+- Add Thread cleaner with search, project/inactivity filters, bulk archive, completion labels, and restore.
+- Add Done & archive to finished inbox threads and Mark done & archive to thread three-dot menus.
+- Format cleaner dates as 5 Feb 2026.
+- Preview cascaded children before archiving and protect running, pinned, waiting, queued, and background work.
+- Require BB 0.46.1 / Plugin SDK 0.6.49 for current thread lifecycle fields.
+
+
 ## 0.2.0 — 2026-09-10
 
 - Public release with optional Telegram onboarding, Settings, explicit updates, and durable Guided Review/extension activity.

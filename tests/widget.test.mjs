@@ -7,7 +7,7 @@ const pluginRoot = new URL('../', import.meta.url).pathname.replace(/\/$/, '');
 const dom = new JSDOM('<!doctype html><html><body></body></html>', {
   url: 'https://fixture.invalid/', pretendToBeVisual: true,
 });
-for (const key of ['window', 'document', 'HTMLElement', 'Element', 'Node', 'MutationObserver', 'getComputedStyle']) {
+for (const key of ['window', 'document', 'HTMLElement', 'Element', 'Node', 'MutationObserver', 'getComputedStyle', 'Event', 'CustomEvent', 'NodeFilter', 'HTMLInputElement']) {
   globalThis[key] = key === 'getComputedStyle' ? dom.window[key].bind(dom.window) : dom.window[key];
 }
 globalThis.requestAnimationFrame = dom.window.requestAnimationFrame.bind(dom.window);
@@ -357,4 +357,75 @@ test('unsafe extension toast destinations are ignored', async () => {
     await ui.emit({ ...reviewEvent(), href });
   }
   assert.equal(activeToasts().length, 0);
+});
+
+test('thread cleaner selects only eligible rows, previews children, and archives only after confirmation', async () => {
+  const rows = [
+    { id: 'idle', title: 'One-off question', projectId: 'p1', projectName: 'Personal', updatedAt: 100, archivedAt: null, status: 'idle', blocked: null, reason: null },
+    { id: 'busy', title: 'Ongoing task', projectId: 'p1', projectName: 'Personal', updatedAt: 200, archivedAt: null, status: 'active', blocked: 'Still running or queued', reason: null },
+  ];
+  let archived = false;
+  const slot = mountPanel({
+    cleanerList: () => ({ items: archived ? [rows[1]] : rows, total: archived ? 1 : 2, projects: [{ id: 'p1', name: 'Personal' }] }),
+    cleanerPreview: input => { assert.deepEqual(input.threadIds, ['idle']); return { token: 'preview', items: [rows[0], { ...rows[0], id: 'child', title: 'Child task' }], reason: input.reason }; },
+    cleanerArchive: input => { assert.equal(input.token, 'preview'); archived = true; return { archivedIds: ['idle', 'child'], errors: [] }; },
+  });
+  fireEvent.click(await screen.findByRole('button', { name: 'Thread cleaner', exact: true }));
+  await screen.findByRole('button', { name: 'Open One-off question' });
+  assert.equal(screen.getByRole('checkbox', { name: 'Select Ongoing task' }).disabled, true);
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Select eligible threads on this page' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Done & archive', exact: true }));
+  await screen.findByText('Child task');
+  assert.equal(slot.inspection.rpcCalls.some(c => c.method === 'cleanerArchive'), false);
+  assert.ok(screen.getByText(/Save any files you need first/));
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm archive' }));
+  await waitFor(() => assert.equal(screen.queryByRole('button', { name: 'Open One-off question' }), null));
+  assert.equal(archived, true);
+});
+
+test('archived cleaner shows completion reason and restores selected conversations', async () => {
+  let restored = false;
+  mountPanel({
+    cleanerList: input => ({ items: input.archived && !restored ? [{ id: 'done', title: 'Completed task', projectId: 'p1', projectName: 'Personal', updatedAt: 100, archivedAt: 200, status: 'idle', blocked: null, reason: 'done' }] : [], total: input.archived && !restored ? 1 : 0, projects: [] }),
+    cleanerRestore: input => { assert.deepEqual(input.threadIds, ['done']); restored = true; return { restoredIds: ['done'], errors: [] }; },
+  });
+  fireEvent.click(await screen.findByRole('button', { name: 'Thread cleaner', exact: true }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Archived', exact: true }));
+  await screen.findByText('Personal · Done');
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Select Completed task' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Restore selected' }));
+  await screen.findByText('No threads match.');
+  assert.equal(restored, true);
+});
+
+test('sidebar done action targets the selected thread and requires confirmation without navigating', async () => {
+  const registration = app.threadActions.find(action => action.id === 'mark-done');
+  const Overlay = app.appOverlays.find(overlay => overlay.id === 'mark-done').component;
+  const target = { id: 'selected-thread', projectId: 'p1', parentThreadId: null, archivedAt: null, pinnedAt: null, sectionId: null, isUnread: false, status: 'idle', environment: null };
+  function Shell() {
+    const data = registration.useData({ threadIds: [target.id] });
+    const item = registration.item({ thread: target, data });
+    return React.createElement(React.Fragment, null,
+      React.createElement('button', { disabled: item.disabled, onClick: () => item.run({ requestRename() {} }) }, item.label),
+      React.createElement(Overlay));
+  }
+  mounted = renderSlot({ component: Shell }, {}, {
+    context: { projectId: 'p1', threadId: 'different-open-thread' },
+    rpc: {
+      cleanerPreview: input => {
+        assert.deepEqual(input, { threadIds: ['selected-thread'], reason: 'done' });
+        return { token: 'sidebar-preview', reason: 'done', items: [{ id: target.id, title: 'Selected sidebar thread', projectId: 'p1', projectName: 'Personal', updatedAt: 100, archivedAt: null, status: 'idle', blocked: null, reason: null }] };
+      },
+      cleanerArchive: input => { assert.deepEqual(input, { token: 'sidebar-preview' }); return { archivedIds: [target.id], errors: [] }; },
+    },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Mark done & archive', exact: true }));
+  await screen.findByText('Selected sidebar thread');
+  assert.equal(mounted.inspection.rpcCalls.some(call => call.method === 'cleanerArchive'), false);
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm archive' }));
+  await waitFor(() => assert.equal(screen.queryByRole('dialog') === null, true));
+  assert.equal(mounted.inspection.rpcCalls.filter(call => call.method === 'cleanerArchive').length, 1);
+  assert.deepEqual(mounted.inspection.navigateCalls, []);
+  assert.equal(registration.item({ thread: { ...target, archivedAt: 1 }, data: { busy: false } }), null);
+  assert.equal(registration.item({ thread: { ...target, status: 'active' }, data: { busy: false } }).disabled, true);
 });
