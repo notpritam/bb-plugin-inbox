@@ -33,6 +33,8 @@ import {
 
 import { createActivities, activityItemSchema, activityRpc, type ActivityItem } from "./activity";
 
+import { cleanerRpc, createCleaner } from "./cleaner";
+
 const NOTI_PREFIX = "noti:";
 const LAST_FINISHED_KEY = "last-finished-noti";
 interface NotiRecord {
@@ -53,6 +55,7 @@ const zItem = z.object({
 
 export const rpcContract = defineRpcContract({
   ...setupRpc,
+  ...cleanerRpc,
   ...activityRpc,
   list: {
     input: z.object({
@@ -391,6 +394,7 @@ export default async function plugin(bb: BbPluginApi) {
 
   bb.rpc.register(rpcContract, {
     ...setup.handlers,
+    ...createCleaner(bb),
     ...activities.handlers,
     async list({ projectId, includeFinished }) {
       const dismissed = await loadDismissed();

@@ -1,5 +1,21 @@
 // Scoped to this plugin. Colors follow the host's current BB palette.
 export const INBOX_STYLES = `
+.ny-cleaner-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:18px; }
+.ny-cleaner-heading h3 { font-size:16px; font-weight:600; margin:0; }
+.ny-cleaner-heading p { font-size:12px; color:var(--muted-foreground); margin-top:5px; }
+.ny-cleaner-filters { display:flex; gap:8px; flex-wrap:wrap; }
+.ny-cleaner-filters input { flex:1; min-width:160px; }
+.ny-cleaner-filters select { border:1px solid var(--border); border-radius:6px; background:var(--background); color:var(--foreground); padding:8px; font-size:12px; max-width:100%; }
+.ny-cleaner-actions { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin:20px 0 12px; font-size:12px; }
+.ny-cleaner-actions label { display:flex; align-items:center; gap:7px; }
+.ny-cleaner input[type=checkbox] { accent-color:var(--primary); width:16px; height:16px; flex:none; }
+.ny-cleaner-row { padding:0 10px; }
+.ny-cleaner-row input:disabled { opacity:.4; }
+.ny-cleaner-pagination { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:18px; font-size:12px; color:var(--muted-foreground); }
+.ny-cleaner-pagination span { margin-right:auto; }
+.ny-cleaner-error { padding:12px; font-size:12px; border:1px solid var(--border); border-radius:8px; overflow-wrap:anywhere; }
+@container (max-width: 540px) { .ny-header { flex-wrap:wrap; } .ny-row-end { flex-wrap:wrap; justify-content:flex-end; max-width:125px; } .ny-cleaner-row .ny-time { display:none; } }
+
 .ny-panel, .ny-home, .ny-toast {
   color: var(--foreground);
   font-family: inherit;

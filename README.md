@@ -4,7 +4,7 @@ One inbox for questions, failed runs, finished threads, and extension activity. 
 conversation, keep finished work until you dismiss it, and receive one popup
 per thread. Popups stay quiet while you are reading that thread.
 
-**Version 0.2.0.** Requires BB 0.41+ and Node 24+ on its host.
+**Version 0.2.1.** Requires BB 0.46.1+ and Node 24+ on its host.
 The inbox needs no separate account, token, or other plugin.
 
 ## Install
@@ -124,3 +124,14 @@ without including tokens or private thread content.
 
 Attention detection draws on `bb-plugin-attention`; notification deduplication
 and BB Connect links draw on `bb-plugin-ntfy`, both by Shane Logsdon (MIT).
+
+## Thread cleaner
+
+Open **Needs You → Thread cleaner** to review all visible threads, including read and dismissed conversations. Search by title, filter by project or inactivity (7, 30, or 90 days), and select up to 100 threads per page. Oldest activity appears first.
+
+- **Done & archive** records that the thread's work is done and archives it.
+- **Archive unwanted** clears one-off questions and conversations you no longer need.
+- The preview lists children and hidden forks that BB will also archive. Running threads, pending questions, pinned threads, queued messages, and active background work are protected, including descendants. A changed selection requires a new preview.
+- **Archived → Restore selected** brings conversations back, including children archived with a restored parent. Completion labels survive plugin reloads. Linked Tracker tasks keep their separate status.
+
+Archiving uses BB's normal lifecycle: conversation history remains, but managed workspace files may be removed after the grace period. Save files before archiving; restoring a conversation cannot recover removed files. No threads are archived automatically.
