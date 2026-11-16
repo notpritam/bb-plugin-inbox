@@ -345,8 +345,8 @@ function HomepageInbox() {
   );
 }
 
-// Sidebar accessory: a small count of outstanding items.
-function InboxBadge() {
+// Native navigation badge; mounted by BB even when the panel is under More.
+function useInboxBadge() {
   const rpc = useRpc<typeof rpcContract>();
   const [total, setTotal] = useState(0);
   const load = useCallback(async () => {
@@ -362,11 +362,7 @@ function InboxBadge() {
   }, [load]);
   useRealtime("inbox", () => void load());
   if (total <= 0) return null;
-  return (
-    <span className="ny-badge">
-      {total > 99 ? "99+" : total}
-    </span>
-  );
+  return { count: total, tone: "critical" as const, label: `${total} items need your attention` };
 }
 
 // Payload of the `inbox:toast` realtime channel (server.ts `maybeNotify`).
@@ -500,14 +496,12 @@ function NeedsYouToaster() {
   return null;
 }
 
-// Single accessory slot, so it carries both the count badge and the (invisible)
-// toast listener that must stay mounted alongside it.
-function InboxAccessory() {
+// Keep the popup listener mounted globally, independently of sidebar layout.
+function InboxNotifications() {
   return (
     <>
       <InboxStyles />
       <NeedsYouToaster />
-      <InboxBadge />
     </>
   );
 }
@@ -515,13 +509,14 @@ function InboxAccessory() {
 export default definePluginApp((app) => {
   app.slots.experimental_threadAction(markThreadDoneAction);
   app.slots.experimental_appOverlay({ id: "mark-done", component: ThreadDoneOverlay });
+  app.slots.experimental_appOverlay({ id: "notifications", component: InboxNotifications });
   app.slots.navPanel({
     id: "inbox",
     title: "Needs You",
     icon: "Inbox",
     path: "inbox",
     component: InboxPanel,
-    experimental_sidebarAccessory: InboxAccessory,
+    experimental_useBadge: useInboxBadge,
   });
   app.slots.homepageSection({
     id: "inbox",

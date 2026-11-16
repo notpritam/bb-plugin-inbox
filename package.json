@@ -5,7 +5,7 @@
   "engines": {
     "node": ">=24",
     "bb": ">=0.46.1",
-    "bbPluginSdk": ">=0.6.49"
+    "bbPluginSdk": ">=0.6.94"
   },
   "bb": {
     "name": "Needs You",
@@ -23,7 +23,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@get-bb/plugin-sdk": "0.6.49",
+    "@get-bb/plugin-sdk": "0.6.132",
     "@pierre/diffs": "^1.2.9",
     "@radix-ui/react-alert-dialog": "^1.1.19",
     "@radix-ui/react-context-menu": "^2.3.3",

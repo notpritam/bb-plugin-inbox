@@ -48,7 +48,10 @@ function event(threadId, attentionAt = 100) {
 function activeToasts() { return toast.getToasts().filter(t => String(t.id).startsWith('needs-you:')); }
 
 function mount(initialThread = 'active') {
-  const Accessory = app.navPanels[0].experimental_sidebarAccessory;
+  const Accessory = app.appOverlays.find(overlay => overlay.id === 'notifications')?.component;
+  assert.ok(Accessory, 'the popup listener must be registered as a global overlay');
+  assert.equal(typeof app.navPanels[0].experimental_useBadge, 'function');
+  assert.equal(app.navPanels[0].experimental_sidebarAccessory, undefined);
   let context;
   function Shell() {
     context = useBbContext();
